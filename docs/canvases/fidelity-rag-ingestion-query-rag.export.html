@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>源文件入库与对话 RAG</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 32px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: #f0f4f8;
+      color: #1a1a2e;
+    }
+    .wrap {
+      max-width: 1200px;
+      margin: 0 auto;
+      background: #fff;
+      border-radius: 16px;
+      padding: 28px 32px 40px;
+      border: 1px solid #dbe4ec;
+    }
+    .header { margin-bottom: 20px; }
+    .header h1 {
+      margin: 0 0 8px 0;
+      font-size: 22px;
+      font-weight: 700;
+      display: inline-block;
+      vertical-align: middle;
+    }
+    .pill {
+      display: inline-block;
+      margin-left: 10px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      background: #e3f2fd;
+      color: #1565c0;
+      vertical-align: middle;
+    }
+    .intro {
+      margin: 0;
+      font-size: 13px;
+      color: #5c6b7a;
+      line-height: 1.5;
+    }
+    h2 {
+      margin: 24px 0 12px 0;
+      font-size: 16px;
+      font-weight: 700;
+    }
+    h3 {
+      margin: 0 0 10px 0;
+      font-size: 14px;
+      font-weight: 700;
+      color: #37474f;
+    }
+    .pipeline-wrap {
+      border: 1px dashed #90a4ae;
+      background: #eceff4;
+      border-radius: 12px;
+      padding: 16px 14px 18px;
+      margin-bottom: 14px;
+    }
+    .pipeline-wrap > h2:first-child {
+      margin-top: 0;
+    }
+    .chain {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px 4px;
+      margin-bottom: 6px;
+    }
+    .chain-step {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .chain-num {
+      flex-shrink: 0;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: #e3f2fd;
+      color: #1565c0;
+      font-size: 12px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid #90caf9;
+    }
+    .chain-card {
+      border: 1px solid #90a4ae;
+      background: #fff;
+      border-radius: 10px;
+      padding: 10px 12px;
+      max-width: 176px;
+      font-size: 11px;
+      line-height: 1.35;
+      color: #1a1a2e;
+      text-align: center;
+    }
+    .chain-arrow {
+      color: #78909c;
+      font-size: 22px;
+      padding: 0 2px;
+      line-height: 1;
+    }
+    .section {
+      border: 1px dashed #90a4ae;
+      background: #eceff4;
+      border-radius: 12px;
+      padding: 12px;
+      margin-bottom: 10px;
+    }
+    .section-row {
+      display: flex;
+      gap: 12px;
+      align-items: stretch;
+    }
+    .section-label {
+      width: 118px;
+      flex-shrink: 0;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      font-weight: 600;
+      font-size: 13px;
+      color: #546e7a;
+      padding-top: 6px;
+    }
+    .groups {
+      display: flex;
+      gap: 8px;
+      flex: 1;
+    }
+    .group {
+      flex: 1;
+      border: 1px dashed #b0bec5;
+      background: #fff;
+      border-radius: 8px;
+      padding: 10px 10px 12px;
+      min-height: 120px;
+    }
+    .group-title {
+      font-size: 12px;
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: #37474f;
+    }
+    .local-list {
+      margin: 0;
+      padding-left: 1.15em;
+      font-size: 12px;
+      color: #5c6b7a;
+      line-height: 1.5;
+    }
+    .local-note {
+      margin: 0 0 10px 0;
+      font-size: 12px;
+      color: #5c6b7a;
+      line-height: 1.45;
+    }
+    .divider {
+      height: 1px;
+      background: #cfd8dc;
+      margin: 22px 0;
+    }
+    .footer-note h2 { margin-top: 8px; }
+    .footer-note p { margin: 0 0 8px 0; font-size: 12px; line-height: 1.5; }
+    .footer-note .muted { color: #5c6b7a; }
+    code { font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="header">
+      <h1>源文件入库与对话 RAG 流程（基于本工程）</h1>
+      <span class="pill">流程结构同上一版 · 视觉对齐 layered-and-flow</span>
+      <p class="intro">
+        对齐常见 LangChain 式<strong>编号链路</strong>：<strong>阶段 A</strong>为入库建索引，<strong>阶段 B</strong>为用户提问时的检索增强生成。
+        OpenAI 路径对应 <code>app/services/openai_client.py</code>；本地路径对应 <code>app/services/rag/pipeline.py</code> 与 <code>KnowledgeBaseService</code>。
+      </p>
+    </div>
+
+    <div class="pipeline-wrap">
+      <h2>OpenAI Vector Store 托管路径</h2>
+
+      <h3>阶段 A — 入库（分段与 Embedding 在 OpenAI 侧完成）</h3>
+      <div class="chain">
+        <div class="chain-step">
+          <span class="chain-num">1</span>
+          <div class="chain-card">本地 / 上传源文件</div>
+        </div>
+        <span class="chain-arrow">→</span>
+        <div class="chain-step">
+          <span class="chain-num">2</span>
+          <div class="chain-card">FastAPI<br />KnowledgeBaseService<br />OpenAIClient</div>
+        </div>
+        <span class="chain-arrow">→</span>
+        <div class="chain-step">
+          <span class="chain-num">3</span>
+          <div class="chain-card">POST /files<br />upload_file → file_id</div>
+        </div>
+        <span class="chain-arrow">→</span>
+        <div class="chain-step">
+          <span class="chain-num">4</span>
+          <div class="chain-card">POST /vector_stores/{id}/files<br />attach_file_to_vector_store</div>
+        </div>
+        <span class="chain-arrow">→</span>
+        <div class="chain-step">
+          <span class="chain-num">5</span>
+          <div class="chain-card">OpenAI 托管<br />解析 · 分段 · Embedding</div>
+        </div>
+        <span class="chain-arrow">→</span>
+        <div class="chain-step">
+          <span class="chain-num">6</span>
+          <div class="chain-card">托管 Vector Store<br />向量索引就绪</div>
+        </div>
+        <span class="chain-arrow">→</span>
+        <div class="chain-step">
+          <span class="chain-num">7</span>
+          <div class="chain-card">JSON 元数据<br />vector_store_id<br />backend_refs</div>
+        </div>
+      </div>
+
+      <div class="divider" style="margin: 14px 0;"></div>
+
+      <h3>阶段 B — 对话 RAG（检索 + Prompt + LLM）</h3>
+      <div class="chain">
+        <div class="chain-step">
+          <span class="chain-num">8</span>
+          <div class="chain-card">用户 Query</div>
+        </div>
+        <span class="chain-arrow">→</span>
+        <div class="chain-step">
+          <span class="chain-num">9</span>
+          <div class="chain-card">FastAPI 网关<br />参数校验</div>
+        </div>
+        <span class="chain-arrow">→</span>
+        <div class="chain-step">
+          <span class="chain-num">10</span>
+          <div class="chain-card">解析知识库<br />vector_store_id</div>
+        </div>
+        <span class="chain-arrow">→</span>
+        <div class="chain-step">
+          <span class="chain-num">11</span>
+          <div class="chain-card">OpenAI File Search /<br />Vector Store 检索</div>
+        </div>
+        <span class="chain-arrow">→</span>
+        <div class="chain-step">
+          <span class="chain-num">12</span>
+          <div class="chain-card">相关文本片段<br />score · citations</div>
+        </div>
+        <span class="chain-arrow">→</span>
+        <div class="chain-step">
+          <span class="chain-num">13</span>
+          <div class="chain-card">Prompt 模板<br />上下文 + 问题</div>
+        </div>
+        <span class="chain-arrow">→</span>
+        <div class="chain-step">
+          <span class="chain-num">14</span>
+          <div class="chain-card">调用 LLM<br />Chat / Responses</div>
+        </div>
+        <span class="chain-arrow">→</span>
+        <div class="chain-step">
+          <span class="chain-num">15</span>
+          <div class="chain-card">Answer<br />可追溯引用</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-row">
+        <div class="section-label">本地 RagPipeline</div>
+        <div class="groups">
+          <div class="group">
+            <div class="group-title">工程内已落地（入库）</div>
+            <p class="local-note">
+              <code>RagPipeline</code>：<code>chunk → embed → JsonVectorStore</code>；由 <code>KnowledgeBaseService.index_document</code> 读取文本后触发。
+            </p>
+            <ul class="local-list">
+              <li>源文件 → LOCAL_UPLOAD_ROOT</li>
+              <li>read_text → RagPipeline.index_document</li>
+              <li>TextChunker.split（RAG_CHUNK_SIZE / OVERLAP）</li>
+              <li>HashEmbeddingService.embed（每段）</li>
+              <li>JsonVectorStore.upsert_document</li>
+            </ul>
+          </div>
+          <div class="group">
+            <div class="group-title">对话检索</div>
+            <ul class="local-list">
+              <li>用户 Query</li>
+              <li>HashEmbeddingService.embed(query)</li>
+              <li>JsonVectorStore.search + SimpleReranker</li>
+              <li>SearchHit → 拼装 Prompt → LLM（业务层对接）</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer-note">
+      <h2>图中需要表达的重点</h2>
+      <p>OpenAI 路径中步骤 5 的解析、分段、向量化不在本仓库显式实现，由 Vector Store 托管流水线完成；本仓库负责 REST 编排与 <code>KnowledgeBaseRepository</code> 元数据。</p>
+      <p class="muted">视觉规范与 <code>fidelity-rag-layered-and-flow</code> 一致：浅灰背景、白底容器、虚线分区、浅蓝序号徽章、白卡片步骤块与灰色箭头。</p>
+    </div>
+  </div>
+</body>
+</html>
