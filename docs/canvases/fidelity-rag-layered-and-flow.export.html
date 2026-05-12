@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fidelity RAG Layered And Flow</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 32px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: #f0f4f8;
+      color: #1a1a2e;
+    }
+    .wrap {
+      max-width: 1200px;
+      margin: 0 auto;
+      background: #fff;
+      border-radius: 16px;
+      padding: 28px 32px 40px;
+      border: 1px solid #dbe4ec;
+    }
+    .header { margin-bottom: 20px; }
+    .header h1 {
+      margin: 0 0 8px 0;
+      font-size: 22px;
+      font-weight: 700;
+      display: inline-block;
+      vertical-align: middle;
+    }
+    .pill {
+      display: inline-block;
+      margin-left: 10px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      background: #e3f2fd;
+      color: #1565c0;
+      vertical-align: middle;
+    }
+    .intro {
+      margin: 0;
+      font-size: 13px;
+      color: #5c6b7a;
+      line-height: 1.5;
+    }
+    h2 {
+      margin: 24px 0 12px 0;
+      font-size: 16px;
+      font-weight: 700;
+    }
+    .section {
+      border: 1px dashed #90a4ae;
+      background: #eceff4;
+      border-radius: 12px;
+      padding: 12px;
+      margin-bottom: 10px;
+    }
+    .section-row {
+      display: flex;
+      gap: 12px;
+      align-items: stretch;
+    }
+    .section-label {
+      width: 118px;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 600;
+      font-size: 13px;
+      color: #546e7a;
+    }
+    .groups {
+      display: flex;
+      gap: 8px;
+      flex: 1;
+    }
+    .group {
+      flex: 1;
+      border: 1px dashed #b0bec5;
+      background: #fff;
+      border-radius: 8px;
+      padding: 8px;
+      min-height: 102px;
+    }
+    .group-title {
+      font-size: 12px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+    .items {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+    }
+    .item {
+      background: #1976d2;
+      color: #fff;
+      border-radius: 4px;
+      padding: 7px 8px;
+      text-align: center;
+      font-size: 11px;
+      line-height: 1.25;
+    }
+    .divider {
+      height: 1px;
+      background: #cfd8dc;
+      margin: 22px 0;
+    }
+    .flow-grid-top {
+      display: grid;
+      grid-template-columns: 1fr 34px 1fr 34px 1fr 34px 1fr;
+      gap: 8px;
+      align-items: stretch;
+    }
+    .flow-grid-bottom {
+      display: grid;
+      grid-template-columns: 1fr 34px 1fr 34px 1fr;
+      gap: 8px;
+      margin-top: 10px;
+      margin-left: 188px;
+      margin-right: 188px;
+      align-items: stretch;
+    }
+    .flow-card {
+      border: 1px solid #90a4ae;
+      background: #fff;
+      border-radius: 10px;
+      padding: 12px;
+      min-height: 112px;
+    }
+    .flow-card h3 {
+      margin: 0 0 8px 0;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .flow-card p {
+      margin: 0;
+      font-size: 11px;
+      color: #5c6b7a;
+      line-height: 1.45;
+    }
+    .arrow {
+      color: #78909c;
+      font-size: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .footer-note h2 { margin-top: 8px; }
+    .footer-note p { margin: 0 0 8px 0; font-size: 12px; line-height: 1.5; }
+    .footer-note .muted { color: #5c6b7a; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="header">
+      <h1>Fidelity RAG 系统架构与流程图</h1>
+      <span class="pill">参考分层矩阵样式</span>
+      <p class="intro">该图按参考图片的横向分层方式组织：上层展示用户入口和 FastAPI 网关，中层展示知识库服务与后端适配，下层突出 OpenAI Files、Vector Stores 与托管 RAG 检索能力。</p>
+    </div>
+
+    <h2>一、RAG POC 分层架构图</h2>
+
+    <div class="section">
+      <div class="section-row">
+        <div class="section-label">接入层</div>
+        <div class="groups">
+          <div class="group">
+            <div class="group-title">用户入口</div>
+            <div class="items">
+              <div class="item">Web / 管理后台</div>
+              <div class="item">Swagger API 调试</div>
+              <div class="item">业务系统调用</div>
+            </div>
+          </div>
+          <div class="group">
+            <div class="group-title">FastAPI 应用</div>
+            <div class="items">
+              <div class="item">Fidelity RAG Gateway</div>
+              <div class="item">API 路由层</div>
+              <div class="item">请求校验与编排</div>
+            </div>
+          </div>
+          <div class="group">
+            <div class="group-title">配置与运行</div>
+            <div class="items">
+              <div class="item">.env 配置</div>
+              <div class="item">Settings</div>
+              <div class="item">Uvicorn 服务</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-row">
+        <div class="section-label">业务服务层</div>
+        <div class="groups">
+          <div class="group">
+            <div class="group-title">知识库服务</div>
+            <div class="items">
+              <div class="item">KnowledgeBaseService</div>
+              <div class="item">创建 / 删除知识库</div>
+              <div class="item">文档上传 / 删除</div>
+            </div>
+          </div>
+          <div class="group">
+            <div class="group-title">元数据管理</div>
+            <div class="items">
+              <div class="item">KnowledgeBaseRepository</div>
+              <div class="item">JSON 元数据</div>
+              <div class="item">backend_refs 映射</div>
+            </div>
+          </div>
+          <div class="group">
+            <div class="group-title">统一后端协议</div>
+            <div class="items">
+              <div class="item">KnowledgeBackend</div>
+              <div class="item">search</div>
+              <div class="item">chat</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-row">
+        <div class="section-label">RAG 后端层</div>
+        <div class="groups">
+          <div class="group">
+            <div class="group-title">OpenAI Backend</div>
+            <div class="items">
+              <div class="item">OpenAIClient</div>
+              <div class="item">主检索后端</div>
+              <div class="item">托管 File Search</div>
+            </div>
+          </div>
+          <div class="group">
+            <div class="group-title">Local Backend</div>
+            <div class="items">
+              <div class="item">TextChunker</div>
+              <div class="item">HashEmbedding</div>
+              <div class="item">JsonVectorStore</div>
+            </div>
+          </div>
+          <div class="group">
+            <div class="group-title">扩展后端</div>
+            <div class="items">
+              <div class="item">FastGPT 预留</div>
+              <div class="item">Hybrid 预留</div>
+              <div class="item">多后端切换</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-row">
+        <div class="section-label">OpenAI 托管能力</div>
+        <div class="groups">
+          <div class="group">
+            <div class="group-title">Files API</div>
+            <div class="items">
+              <div class="item">upload file</div>
+              <div class="item">list file</div>
+              <div class="item">retrieve content</div>
+              <div class="item">delete file</div>
+            </div>
+          </div>
+          <div class="group">
+            <div class="group-title">Vector Stores API</div>
+            <div class="items">
+              <div class="item">create vector store</div>
+              <div class="item">list / retrieve</div>
+              <div class="item">delete vector store</div>
+            </div>
+          </div>
+          <div class="group">
+            <div class="group-title">Vector Store Files</div>
+            <div class="items">
+              <div class="item">create store file</div>
+              <div class="item">list / retrieve</div>
+              <div class="item">delete store file</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-row">
+        <div class="section-label">数据与结果层</div>
+        <div class="groups">
+          <div class="group">
+            <div class="group-title">知识库数据</div>
+            <div class="items">
+              <div class="item">原始文档</div>
+              <div class="item">OpenAI file_id</div>
+              <div class="item">vector_store_id</div>
+            </div>
+          </div>
+          <div class="group">
+            <div class="group-title">检索上下文</div>
+            <div class="items">
+              <div class="item">matched chunks</div>
+              <div class="item">score</div>
+              <div class="item">citations</div>
+            </div>
+          </div>
+          <div class="group">
+            <div class="group-title">模型响应</div>
+            <div class="items">
+              <div class="item">answer</div>
+              <div class="item">引用来源</div>
+              <div class="item">可追溯结果</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <h2>二、用户使用与模型响应流程图</h2>
+    <div class="flow-grid-top">
+      <div class="flow-card">
+        <h3>1. 用户提问</h3>
+        <p>用户在 Web、管理端或业务系统中输入问题，并选择目标知识库。</p>
+      </div>
+      <div class="arrow">→</div>
+      <div class="flow-card">
+        <h3>2. FastAPI 接收请求</h3>
+        <p>RAG Gateway 校验请求参数，读取配置，进入知识库服务编排流程。</p>
+      </div>
+      <div class="arrow">→</div>
+      <div class="flow-card">
+        <h3>3. 定位知识库</h3>
+        <p>KnowledgeBaseService 查询 JSON 元数据，拿到知识库对应的 vector_store_id 和文档映射。</p>
+      </div>
+      <div class="arrow">→</div>
+      <div class="flow-card">
+        <h3>4. OpenAI 托管检索</h3>
+        <p>OpenAI Backend 调用 File Search / Vector Store 检索，获得相关文档片段、分数和引用信息。</p>
+      </div>
+    </div>
+    <div class="flow-grid-bottom">
+      <div class="flow-card">
+        <h3>5. 组装上下文</h3>
+        <p>系统将命中的 chunks、citations 和用户问题组合为模型输入上下文。</p>
+      </div>
+      <div class="arrow">→</div>
+      <div class="flow-card">
+        <h3>6. 模型生成答案</h3>
+        <p>OpenAI 模型基于检索上下文生成回答，并保留引用来源。</p>
+      </div>
+      <div class="arrow">→</div>
+      <div class="flow-card">
+        <h3>7. 返回结果</h3>
+        <p>FastAPI 将 answer、citations、命中文档信息返回给用户或业务系统。</p>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="footer-note">
+      <h2>图中需要表达的重点</h2>
+      <p>OpenAI Vector Stores 是主向量库，OpenAI File Search / RAG 检索是主检索路径。</p>
+      <p class="muted">FastAPI 主要承担网关、业务编排、元数据维护和后端适配；本地 RAG 管线是 POC/开发模式能力，可作为后续 hybrid 后端的一部分。</p>
+    </div>
+  </div>
+</body>
+</html>
