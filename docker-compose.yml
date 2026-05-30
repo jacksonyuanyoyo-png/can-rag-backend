@@ -1,0 +1,23 @@
+# macOS / Linux：PostgreSQL + pgvector（官方镜像）
+# 文档：https://hub.docker.com/r/pgvector/pgvector
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: can-rag-postgres
+    env_file:
+      - docker/postgres/postgres.env
+    ports:
+      # 若本机 5432 已被占用，可改为 "5433:5432"（左为本机端口）
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_pgvector_data:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+volumes:
+  postgres_pgvector_data:

@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
+from uuid import uuid4
 
 
 class BackendType(StrEnum):
@@ -11,6 +12,10 @@ class BackendType(StrEnum):
     FASTGPT = "fastgpt"
     OPENAI = "openai"
     HYBRID = "hybrid"
+
+
+EMBEDDING_MODEL_ID_KEY = "embedding_model_id"
+RESOURCE_TYPE_KEY = "resource_type"
 
 
 def utc_now_iso() -> str:
@@ -51,6 +56,7 @@ class DocumentMetadata:
 @dataclass(slots=True)
 class KnowledgeBaseMetadata:
     name: str
+    id: str = field(default_factory=lambda: str(uuid4()))
     backend: BackendType = BackendType.LOCAL
     description: str = ""
     backend_refs: dict[str, Any] = field(default_factory=dict)
@@ -60,6 +66,7 @@ class KnowledgeBaseMetadata:
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "id": self.id,
             "name": self.name,
             "backend": self.backend.value,
             "description": self.description,
@@ -78,8 +85,10 @@ class KnowledgeBaseMetadata:
             document_id: DocumentMetadata.from_dict(document)
             for document_id, document in dict(data.get("documents") or {}).items()
         }
+        name = str(data["name"])
         return cls(
-            name=str(data["name"]),
+            name=name,
+            id=str(data.get("id") or name),
             backend=BackendType(str(data.get("backend") or BackendType.LOCAL)),
             description=str(data.get("description") or ""),
             backend_refs=dict(data.get("backend_refs") or {}),

@@ -29,6 +29,9 @@ class HashEmbeddingService:
             return vector
         return [v / norm for v in vector]
 
+    def embed_many(self, texts: list[str]) -> list[list[float]]:
+        return [self.embed(text) for text in texts]
+
     @staticmethod
     def _tokens(text: str) -> list[str]:
         return re.findall(r"[\w\u4e00-\u9fff]+", text.lower())

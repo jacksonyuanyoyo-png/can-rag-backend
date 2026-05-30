@@ -27,6 +27,21 @@ class KnowledgeBaseRepository:
             raise ValueError(f"知识库不存在: {name}")
         return kb
 
+    def get_by_id(self, kb_id: str) -> KnowledgeBaseMetadata | None:
+        for metadata in self._read_all().values():
+            if metadata.id == kb_id or metadata.name == kb_id:
+                return metadata
+            api_id = metadata.backend_refs.get("api_id")
+            if isinstance(api_id, str) and api_id.strip() == kb_id:
+                return metadata
+        return None
+
+    def require_by_id(self, kb_id: str) -> KnowledgeBaseMetadata:
+        kb = self.get_by_id(kb_id)
+        if kb is None:
+            raise ValueError(f"知识库不存在: {kb_id}")
+        return kb
+
     def save(self, metadata: KnowledgeBaseMetadata) -> KnowledgeBaseMetadata:
         all_kbs = self._read_all()
         metadata.updated_at = utc_now_iso()
