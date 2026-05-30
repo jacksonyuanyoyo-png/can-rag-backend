@@ -136,6 +136,31 @@ def _read_attr(obj: Any, name: str, default: Any = None) -> Any:
 
 
 @dataclass(frozen=True, slots=True)
+class ParsingConfig:
+    text_extraction: bool = True
+    pdf_enhancement: bool = False
+
+    @classmethod
+    def default(cls) -> ParsingConfig:
+        return cls()
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> ParsingConfig:
+        if not data:
+            return cls.default()
+        return cls(
+            text_extraction=bool(data.get("textExtraction", True)),
+            pdf_enhancement=bool(data.get("pdfEnhancement", False)),
+        )
+
+    def to_dict(self) -> dict[str, bool]:
+        return {
+            "textExtraction": self.text_extraction,
+            "pdfEnhancement": self.pdf_enhancement,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class ChunkingConfig:
     strategy: str
     mode: str | None = None
@@ -148,6 +173,7 @@ class ChunkingConfig:
     index_size: int = 512
     meta_filename: bool = True
     meta_headings: bool = False
+    parsing: ParsingConfig = field(default_factory=ParsingConfig.default)
 
     @classmethod
     def default(
@@ -156,12 +182,14 @@ class ChunkingConfig:
         *,
         meta_filename: bool,
         meta_headings: bool,
+        parsing: ParsingConfig | None = None,
     ) -> ChunkingConfig:
         return cls(
             strategy=strategy,
             index_size=512,
             meta_filename=meta_filename,
             meta_headings=meta_headings,
+            parsing=parsing or ParsingConfig.default(),
         )
 
     @classmethod
@@ -171,6 +199,7 @@ class ChunkingConfig:
         *,
         fallback_strategy: str,
         metadata: Any,
+        parsing: Any = None,
     ) -> ChunkingConfig:
         meta_filename = True
         meta_headings = False
@@ -182,11 +211,14 @@ class ChunkingConfig:
             meta_filename = bool(_read_attr(metadata, "include_file_name", True))
             meta_headings = bool(_read_attr(metadata, "include_headings", False))
 
+        parsing_config = _parsing_config_from_input(parsing)
+
         if options is None:
             return cls.default(
                 fallback_strategy,
                 meta_filename=meta_filename,
                 meta_headings=meta_headings,
+                parsing=parsing_config,
             )
 
         strategy = str(_enum_value(_read_attr(options, "strategy", fallback_strategy)))
@@ -238,6 +270,7 @@ class ChunkingConfig:
             index_size=index_size,
             meta_filename=meta_filename,
             meta_headings=meta_headings,
+            parsing=parsing_config,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -260,6 +293,7 @@ class ChunkingConfig:
             payload["separators"] = list(self.separators)
         if self.paragraph_max_depth is not None:
             payload["paragraphMaxDepth"] = self.paragraph_max_depth
+        payload["parsing"] = self.parsing.to_dict()
         return payload
 
     @classmethod
@@ -277,7 +311,21 @@ class ChunkingConfig:
             index_size=int(data.get("indexSize", 512)),
             meta_filename=bool(data.get("metaFilename", True)),
             meta_headings=bool(data.get("metaHeadings", False)),
+            parsing=ParsingConfig.from_dict(data.get("parsing")),
         )
+
+
+def _parsing_config_from_input(parsing: Any) -> ParsingConfig:
+    if parsing is None:
+        return ParsingConfig.default()
+    if isinstance(parsing, ParsingConfig):
+        return parsing
+    if isinstance(parsing, dict):
+        return ParsingConfig.from_dict(parsing)
+    return ParsingConfig(
+        text_extraction=bool(_read_attr(parsing, "text_extraction", True)),
+        pdf_enhancement=bool(_read_attr(parsing, "pdf_enhancement", False)),
+    )
 
 
 @dataclass(slots=True)

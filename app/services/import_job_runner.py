@@ -16,7 +16,9 @@ from app.repositories.knowledge_base_repository import KnowledgeBaseRepository
 from app.services.import_job_worker import FileProcessor, ImportJobWorker
 from app.services.rag.kb_embedding import resolve_kb_embedding_config
 from app.services.rag.parsing import get_parser_for
+from app.services.rag.parsing.pdf_to_markdown import parse_pdf_with_options
 from app.services.rag.pipeline import RagPipeline
+from app.services.rag.vlm_service import VlmService
 
 logger = logging.getLogger(__name__)
 
@@ -93,18 +95,33 @@ def build_process_file(
     kb_repository: KnowledgeBaseRepository,
     settings: Settings,
 ) -> FileProcessor:
+    vlm_service = VlmService(settings)
+
     def process_file(*, job: ImportJob, file_id: str) -> int:
         file_name, path = resolver(kb_id=job.kb_id, file_id=file_id)
-        parser = get_parser_for(file_name)
-        if parser is None:
-            raise ValueError(f"不支持的文件类型: {file_name}")
-        document = parser.parse(path)
         cfg_dict = jobs.get_chunking_config(job.id)
         config = (
             ChunkingConfig.from_dict(cfg_dict)
             if cfg_dict
             else _DEFAULT_CHUNKING
         )
+        if file_name.lower().endswith(".pdf"):
+            document = parse_pdf_with_options(
+                path,
+                text_extraction=config.parsing.text_extraction,
+                pdf_enhancement=config.parsing.pdf_enhancement,
+                settings=settings,
+                vlm_service=vlm_service,
+            )
+            if config.parsing.pdf_enhancement:
+                config = ChunkingConfig.from_dict(
+                    {**config.to_dict(), "metaHeadings": True}
+                )
+        else:
+            parser = get_parser_for(file_name)
+            if parser is None:
+                raise ValueError(f"不支持的文件类型: {file_name}")
+            document = parser.parse(path)
         metadata = kb_repository.get_by_id(job.kb_id)
         embedding_config = resolve_kb_embedding_config(settings, metadata)
         result = pipeline.index_data(

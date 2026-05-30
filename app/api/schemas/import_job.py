@@ -33,6 +33,13 @@ class ImportJobMetadataOptions(BaseModel):
     include_headings: bool = Field(default=False, alias="includeHeadings")
 
 
+class ParsingOptions(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    text_extraction: bool = Field(default=True, alias="textExtraction")
+    pdf_enhancement: bool = Field(default=False, alias="pdfEnhancement")
+
+
 class CustomChunkConfig(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -124,6 +131,7 @@ class CreateImportJobRequest(BaseModel):
     file_ids: list[str] = Field(min_length=1, alias="fileIds")
     chunk_strategy: str = Field(default="default", alias="chunkStrategy")
     chunking: ChunkingOptions | None = None
+    parsing: ParsingOptions | None = None
     metadata: ImportJobMetadataOptions = Field(default_factory=ImportJobMetadataOptions)
 
     @model_validator(mode="after")
@@ -150,6 +158,7 @@ class RetryImportJobRequest(BaseModel):
 
     options: ImportJobRetryOptions | None = None
     chunking: ChunkingOptions | None = None
+    parsing: ParsingOptions | None = None
 
     @model_validator(mode="after")
     def _apply_chunking_precedence(self) -> RetryImportJobRequest:

@@ -228,3 +228,26 @@ def test_retry_request_applies_chunking() -> None:
     assert req.options.chunk_overlap == 16
     assert req.options.include_file_name is False
     assert req.options.include_headings is True
+
+
+def test_parsing_options_parses() -> None:
+    req = _create(
+        {
+            "parsing": {"textExtraction": True, "pdfEnhancement": True},
+            "chunking": {"strategy": "default"},
+        }
+    )
+
+    assert req.parsing is not None
+    assert req.parsing.text_extraction is True
+    assert req.parsing.pdf_enhancement is True
+
+
+def test_retry_request_accepts_parsing() -> None:
+    req = RetryImportJobRequest.model_validate(
+        {"parsing": {"textExtraction": False, "pdfEnhancement": True}}
+    )
+
+    assert req.parsing is not None
+    assert req.parsing.text_extraction is False
+    assert req.parsing.pdf_enhancement is True

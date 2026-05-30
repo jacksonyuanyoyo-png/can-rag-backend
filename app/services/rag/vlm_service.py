@@ -17,6 +17,12 @@ _SYSTEM_PROMPT = (
     "若是流程图输出有序步骤，若是表格输出 markdown 表格，否则输出要点列表；只输出内容本身"
 )
 
+_PAGE_MARKDOWN_SYSTEM_PROMPT = (
+    "你是文档 OCR 助手。请将 PDF 页面图片转换为 Markdown："
+    "保留标题层级、列表、表格（markdown table）、键位/布局说明；"
+    "图片区域用 ![描述](placeholder) 占位；只输出 Markdown，不要解释或前后缀"
+)
+
 _SUFFIX_MIME: dict[str, str] = {
     ".png": "image/png",
     ".jpg": "image/jpeg",
@@ -84,6 +90,39 @@ class VlmService:
         mime_type = _mime_from_suffix(file_path.suffix)
         return self.describe_image(image_bytes, mime_type=mime_type, hint=hint)
 
+    def page_to_markdown(
+        self,
+        image_bytes: bytes,
+        *,
+        page_number: int,
+        mime_type: str = "image/png",
+        force: bool = False,
+    ) -> str:
+        if not force and not self._settings.VLM_ENABLED:
+            return ""
+        size = len(image_bytes)
+        min_bytes = 1 if force else self._settings.VLM_MIN_IMAGE_BYTES
+        if size < min_bytes:
+            logger.debug(
+                "vlm page markdown skip: image too small (%d < %d bytes)",
+                size,
+                min_bytes,
+            )
+            return ""
+        if size > self._settings.VLM_MAX_IMAGE_BYTES:
+            logger.debug(
+                "vlm page markdown skip: image too large (%d > %d bytes)",
+                size,
+                self._settings.VLM_MAX_IMAGE_BYTES,
+            )
+            return ""
+        messages = _build_page_markdown_messages(
+            image_bytes,
+            mime_type=mime_type,
+            page_number=page_number,
+        )
+        return self._invoke(messages)
+
     def _invoke(self, messages: list[dict[str, Any]]) -> str:
         if self._chat_completion is not None:
             return self._chat_completion(messages)
@@ -116,6 +155,29 @@ class VlmService:
                 timeout=self._settings.VLM_TIMEOUT_SECONDS,
             )
         return self._client
+
+
+def _build_page_markdown_messages(
+    image_bytes: bytes,
+    *,
+    mime_type: str,
+    page_number: int,
+) -> list[dict[str, Any]]:
+    encoded = base64.standard_b64encode(image_bytes).decode("ascii")
+    data_url = f"data:{mime_type};base64,{encoded}"
+    return [
+        {"role": "system", "content": _PAGE_MARKDOWN_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": f"请将第 {page_number} 页转换为 Markdown。",
+                },
+                {"type": "image_url", "image_url": {"url": data_url}},
+            ],
+        },
+    ]
 
 
 def _build_messages(

@@ -142,6 +142,8 @@ class ChunkingService:
         return "\n".join(prefix_lines) + "\n" + raw_text
 
     def _split_default(self, document: ParsedDocument, config: ChunkingConfig) -> list[DataChunk]:
+        if self._should_split_markdown(document):
+            return self._split_markdown_sections(document, config)
         page = self._first_block_page(document.blocks)
         texts = self._recursive_split(
             document.full_text,
@@ -152,6 +154,39 @@ class ChunkingService:
             separators=list(_PARAGRAPH_SEPARATORS),
         )
         return self._build_chunks(texts, page=page)
+
+    @staticmethod
+    def _should_split_markdown(document: ParsedDocument) -> bool:
+        return any(block.heading for block in document.blocks)
+
+    def _split_markdown_sections(
+        self,
+        document: ParsedDocument,
+        config: ChunkingConfig,
+    ) -> list[DataChunk]:
+        max_size = config.max_chunk_size or self._settings.RAG_CHUNK_SIZE
+        overlap = (
+            config.overlap
+            if config.overlap is not None
+            else self._settings.RAG_CHUNK_OVERLAP
+        )
+        pieces: list[tuple[str, int | None]] = []
+        for block in document.blocks:
+            text = block.text.strip()
+            if not text:
+                continue
+            section = f"## {block.heading}\n\n{text}" if block.heading else text
+            if len(section) <= max_size:
+                pieces.append((section, block.page))
+                continue
+            for part in self._recursive_split(
+                section,
+                chunk_size=max_size,
+                chunk_overlap=overlap,
+                separators=list(_PARAGRAPH_SEPARATORS),
+            ):
+                pieces.append((part, block.page))
+        return self._build_chunks_from_pairs(pieces)
 
     def _split_paragraph(self, document: ParsedDocument, config: ChunkingConfig) -> list[DataChunk]:
         _ = config.paragraph_use_model

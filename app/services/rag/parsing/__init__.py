@@ -1,11 +1,13 @@
 from app.services.rag.parsing.base import DocumentParser, ParsedBlock, ParsedDocument
 from app.services.rag.parsing.docx_parser import DocxDocumentParser
+from app.services.rag.parsing.md_parser import MarkdownDocumentParser
 from app.services.rag.parsing.pdf_parser import PdfDocumentParser
 from app.services.rag.parsing.pptx_parser import PptxDocumentParser
 from app.services.rag.parsing.txt_parser import TxtDocumentParser
 
 _PARSERS: tuple[DocumentParser, ...] = (
     TxtDocumentParser(),
+    MarkdownDocumentParser(),
     PdfDocumentParser(),
     DocxDocumentParser(),
     PptxDocumentParser(),
@@ -24,6 +26,7 @@ __all__ = [
     "ParsedBlock",
     "ParsedDocument",
     "TxtDocumentParser",
+    "MarkdownDocumentParser",
     "PdfDocumentParser",
     "DocxDocumentParser",
     "PptxDocumentParser",

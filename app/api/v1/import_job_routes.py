@@ -94,6 +94,7 @@ async def create_import_job(
         body.chunking,
         fallback_strategy=body.chunk_strategy,
         metadata=body.metadata,
+        parsing=body.parsing,
     )
     result = service.create(
         ImportJobCreateRequest(
@@ -179,15 +180,14 @@ async def retry_import_job(
             else False
         ),
     )
-    chunking = (
-        ChunkingConfig.from_chunking_options(
+    chunking = None
+    if body.chunking is not None or body.parsing is not None:
+        chunking = ChunkingConfig.from_chunking_options(
             body.chunking,
             fallback_strategy=fallback_strategy,
             metadata=retry_metadata,
+            parsing=body.parsing,
         )
-        if body.chunking is not None
-        else None
-    )
     result = service.retry(
         ImportJobRetryRequest(
             job_id=job_id,

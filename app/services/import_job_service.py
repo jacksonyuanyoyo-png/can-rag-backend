@@ -188,22 +188,29 @@ class ImportJobService:
             meta_headings = request.chunking.meta_headings
             chunking = request.chunking
         else:
-            chunk_strategy = (
-                normalize_chunk_strategy(request.chunk_strategy)
-                if request.chunk_strategy is not None
-                else (source.option.chunk_strategy if source.option else "semantic")
-            )
-            meta_filename = (
-                request.meta_filename
-                if request.meta_filename is not None
-                else (source.option.meta_filename if source.option else True)
-            )
-            meta_headings = (
-                request.meta_headings
-                if request.meta_headings is not None
-                else (source.option.meta_headings if source.option else False)
-            )
-            chunking = None
+            source_cfg = self._jobs.get_chunking_config(source.id)
+            if source_cfg is not None:
+                chunking = ChunkingConfig.from_dict(source_cfg)
+                chunk_strategy = chunking.strategy
+                meta_filename = chunking.meta_filename
+                meta_headings = chunking.meta_headings
+            else:
+                chunk_strategy = (
+                    normalize_chunk_strategy(request.chunk_strategy)
+                    if request.chunk_strategy is not None
+                    else (source.option.chunk_strategy if source.option else "semantic")
+                )
+                meta_filename = (
+                    request.meta_filename
+                    if request.meta_filename is not None
+                    else (source.option.meta_filename if source.option else True)
+                )
+                meta_headings = (
+                    request.meta_headings
+                    if request.meta_headings is not None
+                    else (source.option.meta_headings if source.option else False)
+                )
+                chunking = None
 
         hash_payload: dict[str, Any] = {
             "operation": "retry_import_job",

@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     VLM_TIMEOUT_SECONDS: float = 60.0
     VLM_MIN_IMAGE_BYTES: int = 5120
     VLM_MAX_IMAGE_BYTES: int = 8_000_000
+    PDF_AUTO_ENHANCE_MIN_CHARS: int = 100
+    PDF_RENDER_DPI: int = 150
     DATABASE_URL: str = ""
 
     LOCAL_UPLOAD_ROOT: str = str(_PROJECT_ROOT / "app" / "storage" / "uploads")
