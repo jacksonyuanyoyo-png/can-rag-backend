@@ -313,6 +313,11 @@ class ImportJobRepository:
         if progress is not None:
             if progress < 0 or progress > 100:
                 raise ValueError("progress 必须在 0-100 之间。")
+            if status not in (
+                ImportJobStatus.FAILED,
+                ImportJobStatus.CANCELLED,
+            ):
+                progress = max(current.progress, progress)
             assignments.append("progress = %s")
             params.append(progress)
         if stage is not None:

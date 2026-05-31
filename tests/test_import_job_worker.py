@@ -90,6 +90,11 @@ class FakeImportJobRepository:
 
         if progress is not None and (progress < 0 or progress > 100):
             raise ValueError("progress 必须在 0-100 之间。")
+        if progress is not None and status not in (
+            ImportJobStatus.FAILED,
+            ImportJobStatus.CANCELLED,
+        ):
+            progress = max(current.progress, progress)
 
         updated = ImportJob(
             id=current.id,
@@ -196,7 +201,14 @@ def test_run_job_all_files_success() -> None:
     file_sink = RecordingFileStatusSink()
     kb_sink = RecordingKbCountSink()
 
-    def process_file(*, job: ImportJob, file_id: str) -> int:
+    def process_file(
+        *,
+        job: ImportJob,
+        file_id: str,
+        file_index: int,
+        progress: object,
+    ) -> int:
+        del job, file_index, progress
         return {"file_a": 3, "file_b": 5}[file_id]
 
     result = _worker(repo, process_file, file_sink=file_sink, kb_sink=kb_sink).run_job(
@@ -226,7 +238,14 @@ def test_run_job_partial_file_failure() -> None:
     file_sink = RecordingFileStatusSink()
     kb_sink = RecordingKbCountSink()
 
-    def process_file(*, job: ImportJob, file_id: str) -> int:
+    def process_file(
+        *,
+        job: ImportJob,
+        file_id: str,
+        file_index: int,
+        progress: object,
+    ) -> int:
+        del job, file_index, progress
         if file_id == "file_bad":
             raise RuntimeError("parse failed")
         return 2
@@ -263,7 +282,14 @@ def test_run_job_terminal_is_idempotent() -> None:
     )
     repo.seed(job)
 
-    def process_file(*, job: ImportJob, file_id: str) -> int:
+    def process_file(
+        *,
+        job: ImportJob,
+        file_id: str,
+        file_index: int,
+        progress: object,
+    ) -> int:
+        del job, file_id, file_index, progress
         raise AssertionError("不应处理终态任务")
 
     result = _worker(repo, process_file).run_job(job.id)
@@ -277,7 +303,14 @@ def test_run_job_progress_and_transitions_are_valid() -> None:
     job = _make_job(file_ids=["f1", "f2", "f3"])
     repo.seed(job)
 
-    def process_file(*, job: ImportJob, file_id: str) -> int:
+    def process_file(
+        *,
+        job: ImportJob,
+        file_id: str,
+        file_index: int,
+        progress: object,
+    ) -> int:
+        del job, file_id, file_index, progress
         return 1
 
     _worker(repo, process_file).run_job(job.id)

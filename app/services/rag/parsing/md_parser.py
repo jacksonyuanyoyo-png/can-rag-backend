@@ -7,6 +7,19 @@ from app.services.rag.parsing.base import DocumentParser, ParsedBlock, ParsedDoc
 
 _HEADING_LINE_RE = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
 _PAGE_HEADING_RE = re.compile(r"^page\s+(\d+)$", re.IGNORECASE)
+_IMAGE_REF_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+
+
+def extract_image_storage_keys(text: str) -> list[str]:
+    """从 Markdown 文本中提取 kb_images/ 下的图片 storage_key（去重、保序）。"""
+    keys: list[str] = []
+    seen: set[str] = set()
+    for match in _IMAGE_REF_RE.finditer(text):
+        target = match.group(2).strip()
+        if target.startswith("kb_images/") and target not in seen:
+            seen.add(target)
+            keys.append(target)
+    return keys
 
 
 def parse_markdown_text(text: str) -> ParsedDocument:

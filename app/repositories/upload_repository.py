@@ -162,6 +162,18 @@ class UploadRepository:
                 )
             self._commit(conn)
 
+    def delete_upload_sessions_for_storage_key(self, storage_key: str) -> None:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    DELETE FROM app.t_fact_upload_object
+                    WHERE storage_key = %s
+                    """,
+                    (storage_key,),
+                )
+            self._commit(conn)
+
     def create_upload_object(
         self,
         *,
@@ -409,6 +421,36 @@ class UploadRepository:
 
         if row is None:
             raise RuntimeError("创建知识库文件记录失败。")
+        return KnowledgeBaseFileRecord.from_row(dict(row))
+
+    def update_kb_file(
+        self,
+        *,
+        file_id: str,
+        mime_type: str,
+        size_bytes: int,
+        status: str,
+    ) -> KnowledgeBaseFileRecord | None:
+        now = datetime.now(UTC)
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE app.t_dim_kb_file
+                    SET mime_type = %s,
+                        size_bytes = %s,
+                        status = %s,
+                        updated_at = %s
+                    WHERE id = %s
+                    RETURNING *
+                    """,
+                    (mime_type, size_bytes, status, now, file_id),
+                )
+                row = cur.fetchone()
+            self._commit(conn)
+
+        if row is None:
+            return None
         return KnowledgeBaseFileRecord.from_row(dict(row))
 
     def _commit(self, conn: psycopg.Connection) -> None:

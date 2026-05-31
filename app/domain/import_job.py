@@ -139,6 +139,7 @@ def _read_attr(obj: Any, name: str, default: Any = None) -> Any:
 class ParsingConfig:
     text_extraction: bool = True
     pdf_enhancement: bool = False
+    web_use_browser_fallback: bool | None = None
 
     @classmethod
     def default(cls) -> ParsingConfig:
@@ -148,16 +149,23 @@ class ParsingConfig:
     def from_dict(cls, data: dict[str, Any] | None) -> ParsingConfig:
         if not data:
             return cls.default()
+        web_fallback = data.get("webUseBrowserFallback")
         return cls(
             text_extraction=bool(data.get("textExtraction", True)),
             pdf_enhancement=bool(data.get("pdfEnhancement", False)),
+            web_use_browser_fallback=(
+                bool(web_fallback) if web_fallback is not None else None
+            ),
         )
 
-    def to_dict(self) -> dict[str, bool]:
-        return {
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
             "textExtraction": self.text_extraction,
             "pdfEnhancement": self.pdf_enhancement,
         }
+        if self.web_use_browser_fallback is not None:
+            payload["webUseBrowserFallback"] = self.web_use_browser_fallback
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -322,9 +330,13 @@ def _parsing_config_from_input(parsing: Any) -> ParsingConfig:
         return parsing
     if isinstance(parsing, dict):
         return ParsingConfig.from_dict(parsing)
+    web_fallback = _read_attr(parsing, "web_use_browser_fallback", None)
     return ParsingConfig(
         text_extraction=bool(_read_attr(parsing, "text_extraction", True)),
         pdf_enhancement=bool(_read_attr(parsing, "pdf_enhancement", False)),
+        web_use_browser_fallback=(
+            bool(web_fallback) if web_fallback is not None else None
+        ),
     )
 
 

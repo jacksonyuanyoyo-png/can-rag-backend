@@ -49,8 +49,10 @@ class FakePipeline:
         config: ChunkingConfig,
         file_name: str,
         embedding_config: KbEmbeddingConfig | None = None,
+        force_image_description: bool = False,
+        on_progress: object = None,
     ) -> dict[str, int]:
-        del document
+        del document, force_image_description, on_progress
         self.calls.append(
             IndexDataCall(
                 knowledge_base=knowledge_base,
@@ -101,7 +103,14 @@ def test_build_process_file_success(tmp_path: Path) -> None:
         settings=settings,
     )
 
-    result = process_file(job=_sample_job(), file_id="file_1")
+    from app.services.import_job_progress import NullImportJobProgressReporter
+
+    result = process_file(
+        job=_sample_job(),
+        file_id="file_1",
+        file_index=0,
+        progress=NullImportJobProgressReporter(),
+    )
 
     assert result == 3
     assert len(pipeline.calls) == 1
@@ -136,7 +145,14 @@ def test_build_process_file_unsupported_extension(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ValueError, match="不支持的文件类型"):
-        process_file(job=_sample_job(), file_id="file_1")
+        from app.services.import_job_progress import NullImportJobProgressReporter
+
+        process_file(
+            job=_sample_job(),
+            file_id="file_1",
+            file_index=0,
+            progress=NullImportJobProgressReporter(),
+        )
 
 
 @dataclass

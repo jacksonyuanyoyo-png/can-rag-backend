@@ -10,10 +10,21 @@ from app.domain.import_job import (
     TERMINAL_STATUSES,
 )
 from app.repositories.import_job_repository import ImportJobRepository
+from app.services.import_job_progress import (
+    ImportJobProgressReporter,
+    ImportJobProgressTracker,
+)
 
 
 class FileProcessor(Protocol):
-    def __call__(self, *, job: ImportJob, file_id: str) -> int: ...
+    def __call__(
+        self,
+        *,
+        job: ImportJob,
+        file_id: str,
+        file_index: int,
+        progress: ImportJobProgressReporter,
+    ) -> int: ...
 
 
 class FileStatusSink(Protocol):
@@ -60,13 +71,6 @@ class NullKbCountSink:
         pass
 
 
-_PROCESSING_STAGES: tuple[ImportJobStage, ...] = (
-    ImportJobStage.CHUNK,
-    ImportJobStage.EMBED,
-    ImportJobStage.INDEX,
-)
-
-
 class ImportJobWorker:
     def __init__(
         self,
@@ -89,40 +93,46 @@ class ImportJobWorker:
         if job.status in TERMINAL_STATUSES:
             return job
 
+        tracker = ImportJobProgressTracker(
+            self._jobs,
+            job_id,
+            file_count=len(job.file_ids),
+        )
         if job.status == ImportJobStatus.QUEUED:
-            job = self._require_updated(
-                self._jobs.update_progress(
-                    job_id,
-                    status=ImportJobStatus.RUNNING,
-                    stage=ImportJobStage.PARSE,
-                    progress=0,
-                    clear_error=True,
-                ),
-                job_id,
+            tracker.report_stage(
+                ImportJobStage.UPLOAD,
+                file_index=0,
+                fraction=1.0,
+                force=True,
             )
+            tracker.mark_running()
+            job = self._require_updated(self._jobs.get(job_id), job_id)
 
-        for stage in _PROCESSING_STAGES:
-            job = self._require_updated(
-                self._jobs.update_progress(job_id, stage=stage),
-                job_id,
-            )
-
-        total_files = len(job.file_ids)
         done_files = 0
         total_chunks = 0
         first_error: str | None = None
-        processed = 0
 
-        for file_id in job.file_ids:
+        for file_index, file_id in enumerate(job.file_ids):
             self._file_status_sink.mark_file(
                 kb_id=job.kb_id,
                 file_id=file_id,
                 status=ImportJobFileStatus.RUNNING,
             )
             try:
-                chunk_count = self._process_file(job=job, file_id=file_id)
+                chunk_count = self._process_file(
+                    job=job,
+                    file_id=file_id,
+                    file_index=file_index,
+                    progress=tracker,
+                )
                 total_chunks += chunk_count
                 done_files += 1
+                tracker.report_stage(
+                    ImportJobStage.INDEX,
+                    file_index=file_index,
+                    fraction=1.0,
+                    force=True,
+                )
                 self._file_status_sink.mark_file(
                     kb_id=job.kb_id,
                     file_id=file_id,
@@ -138,30 +148,15 @@ class ImportJobWorker:
                     error=str(exc),
                 )
 
-            processed += 1
-            if total_files > 0:
-                progress = min(100, (processed * 100) // total_files)
-                job = self._require_updated(
-                    self._jobs.update_progress(job_id, progress=progress),
-                    job_id,
-                )
-
         if first_error is None:
-            self._jobs.update_progress(
-                job_id,
-                status=ImportJobStatus.COMPLETED,
-                stage=ImportJobStage.DONE,
-                progress=100,
-            )
+            tracker.mark_completed()
             self._kb_count_sink.add_counts(
                 kb_id=job.kb_id,
                 file_count_delta=done_files,
                 chunk_count_delta=total_chunks,
             )
         else:
-            self._jobs.update_progress(
-                job_id,
-                status=ImportJobStatus.FAILED,
+            tracker.mark_failed(
                 error_code="IMPORT_FILE_FAILED",
                 error_message=first_error,
             )

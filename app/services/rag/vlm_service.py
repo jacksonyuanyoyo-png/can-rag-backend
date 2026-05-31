@@ -18,9 +18,18 @@ _SYSTEM_PROMPT = (
 )
 
 _PAGE_MARKDOWN_SYSTEM_PROMPT = (
-    "你是文档 OCR 助手。请将 PDF 页面图片转换为 Markdown："
+    "你是文档 OCR 助手。请将页面图片中的全部可见文字、键位标签、表格与图示说明转为 Markdown。"
+    "适用于键盘说明书、产品手册、布局图。保留标题层级、列表、表格（markdown table）。"
+    "图示区域用 ![描述](placeholder) 占位。"
+    "必须输出完整正文，不得说这是照片、不得拒答、不得要求更清晰图片；只输出 Markdown，不要解释"
+)
+
+_PDF_PAGE_MARKDOWN_SYSTEM_PROMPT = (
+    "你是文档 OCR 助手。请将 PDF 页面转换为 Markdown："
     "保留标题层级、列表、表格（markdown table）、键位/布局说明；"
-    "图片区域用 ![描述](placeholder) 占位；只输出 Markdown，不要解释或前后缀"
+    "图片区域用 ![描述](placeholder) 占位；"
+    "必须输出完整 Markdown 正文，不得拒绝、不得只回复无法处理或询问用户需求；"
+    "不要代码围栏，不要解释或前后缀"
 )
 
 _SUFFIX_MIME: dict[str, str] = {
@@ -58,15 +67,18 @@ class VlmService:
         *,
         mime_type: str = "image/png",
         hint: str | None = None,
+        force: bool = False,
+        model: str | None = None,
     ) -> str | None:
-        if not self._settings.VLM_ENABLED:
+        if not force and not self._settings.VLM_ENABLED:
             return None
         size = len(image_bytes)
-        if size < self._settings.VLM_MIN_IMAGE_BYTES:
+        min_bytes = 1 if force else self._settings.VLM_MIN_IMAGE_BYTES
+        if size < min_bytes:
             logger.debug(
                 "vlm skip: image too small (%d < %d bytes)",
                 size,
-                self._settings.VLM_MIN_IMAGE_BYTES,
+                min_bytes,
             )
             return None
         if size > self._settings.VLM_MAX_IMAGE_BYTES:
@@ -77,7 +89,7 @@ class VlmService:
             )
             return None
         messages = _build_messages(image_bytes, mime_type=mime_type, hint=hint)
-        return self._invoke(messages)
+        return self._invoke(messages, model=model)
 
     def describe_image_file(
         self,
@@ -97,6 +109,7 @@ class VlmService:
         page_number: int,
         mime_type: str = "image/png",
         force: bool = False,
+        model: str | None = None,
     ) -> str:
         if not force and not self._settings.VLM_ENABLED:
             return ""
@@ -121,15 +134,55 @@ class VlmService:
             mime_type=mime_type,
             page_number=page_number,
         )
-        return self._invoke(messages)
+        resolved = model or (self._settings.PDF_VLM_MODEL if force else None)
+        return self._invoke(messages, model=resolved)
 
-    def _invoke(self, messages: list[dict[str, Any]]) -> str:
+    def pdf_page_to_markdown(
+        self,
+        pdf_bytes: bytes,
+        *,
+        page_number: int,
+        filename: str = "page.pdf",
+        force: bool = False,
+    ) -> str:
+        if not force and not self._settings.VLM_ENABLED:
+            return ""
+        size = len(pdf_bytes)
+        min_bytes = 1 if force else self._settings.VLM_MIN_IMAGE_BYTES
+        if size < min_bytes:
+            logger.debug(
+                "vlm pdf page markdown skip: pdf too small (%d < %d bytes)",
+                size,
+                min_bytes,
+            )
+            return ""
+        if size > self._settings.VLM_MAX_PDF_BYTES:
+            logger.debug(
+                "vlm pdf page markdown skip: pdf too large (%d > %d bytes)",
+                size,
+                self._settings.VLM_MAX_PDF_BYTES,
+            )
+            return ""
+        messages = _build_pdf_page_markdown_messages(
+            pdf_bytes,
+            filename=filename,
+            page_number=page_number,
+        )
+        return self._invoke(messages, model=self._settings.PDF_VLM_MODEL)
+
+    def _invoke(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        model: str | None = None,
+    ) -> str:
         if self._chat_completion is not None:
             return self._chat_completion(messages)
         client = self._client_or_raise()
+        resolved_model = model or self._settings.VLM_MODEL
         try:
             response = client.chat.completions.create(
-                model=self._settings.VLM_MODEL,
+                model=resolved_model,
                 messages=messages,
             )
         except AuthenticationError as exc:
@@ -155,6 +208,35 @@ class VlmService:
                 timeout=self._settings.VLM_TIMEOUT_SECONDS,
             )
         return self._client
+
+
+def _build_pdf_page_markdown_messages(
+    pdf_bytes: bytes,
+    *,
+    filename: str,
+    page_number: int,
+) -> list[dict[str, Any]]:
+    encoded = base64.standard_b64encode(pdf_bytes).decode("ascii")
+    file_data = f"data:application/pdf;base64,{encoded}"
+    return [
+        {"role": "system", "content": _PDF_PAGE_MARKDOWN_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {
+                        "filename": filename,
+                        "file_data": file_data,
+                    },
+                },
+                {
+                    "type": "text",
+                    "text": f"请将第 {page_number} 页转换为 Markdown。",
+                },
+            ],
+        },
+    ]
 
 
 def _build_page_markdown_messages(

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request, status
+from fastapi.responses import FileResponse
 
 from app.api.common import get_request_id, success_response
+from app.core.config import get_settings
 from app.api.schemas.upload import CompleteUploadRequest, PresignUploadRequest
 from app.core.dependencies import extract_bearer_token, get_auth_service, require_app_state_service
 from app.core.errors import BusinessError, ErrorCode
@@ -63,6 +66,25 @@ async def presign_uploads(
         data={"uploads": [result.to_api_dict() for result in results]},
         request_id=get_request_id(request),
     )
+
+
+@upload_router.get("/assets/{storage_path:path}")
+async def get_upload_asset(storage_path: str) -> FileResponse:
+    """按 storage_key 读取落盘文件（如 kb_images/*.png），供原文对照 Markdown 图片展示。"""
+    relative = Path(storage_path)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise BusinessError(
+            ErrorCode.VALIDATION_ERROR,
+            message="Invalid storage path",
+            details={"storagePath": storage_path},
+        )
+    file_path = get_settings().upload_root_resolved / relative
+    if not file_path.is_file():
+        raise BusinessError(
+            ErrorCode.RESOURCE_NOT_FOUND,
+            details={"storagePath": storage_path},
+        )
+    return FileResponse(file_path)
 
 
 @upload_router.post("/{upload_id}:complete")

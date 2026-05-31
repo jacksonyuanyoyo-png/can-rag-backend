@@ -38,6 +38,10 @@ class ParsingOptions(BaseModel):
 
     text_extraction: bool = Field(default=True, alias="textExtraction")
     pdf_enhancement: bool = Field(default=False, alias="pdfEnhancement")
+    web_use_browser_fallback: bool | None = Field(
+        default=None,
+        alias="webUseBrowserFallback",
+    )
 
 
 class CustomChunkConfig(BaseModel):

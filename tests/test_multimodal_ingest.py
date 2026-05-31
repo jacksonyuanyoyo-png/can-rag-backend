@@ -55,6 +55,7 @@ def test_multimodal_index_and_search_with_injected_vlm(tmp_path: Path) -> None:
         document=document,
         config=config,
         file_name=file_name,
+        force_image_description=True,
     )
 
     assert counts["images"] >= 1
@@ -70,6 +71,43 @@ def test_multimodal_index_and_search_with_injected_vlm(tmp_path: Path) -> None:
     citation = image_hits[0].citation
     assert citation.get("storage_key") == storage_key
     assert citation.get("page") == 1
+
+
+def test_text_chunk_citation_includes_image_storage_key(tmp_path: Path) -> None:
+    upload_root = tmp_path / "uploads_keys"
+    vector_root = tmp_path / "vectors_keys"
+    settings = Settings(
+        LOCAL_UPLOAD_ROOT=str(upload_root),
+        RAG_BACKEND="local",
+        LOCAL_VECTOR_STORE_PATH=str(vector_root),
+        VLM_ENABLED=False,
+        RAG_EMBEDDING_DIMENSIONS=256,
+    )
+    storage_key = "kb_images/sample.png"
+    document = ParsedDocument(
+        full_text=f"说明。\n\n![布局图]({storage_key})\n\n正文。",
+        blocks=[
+            ParsedBlock(
+                page=1,
+                text=f"说明。\n\n![布局图]({storage_key})\n\n正文。",
+            )
+        ],
+        images=[],
+    )
+    pipeline = _HashRagPipeline(settings, JsonVectorStore(vector_root))
+    config = ChunkingConfig(strategy="default", max_chunk_size=500, overlap=0, index_size=80)
+
+    pipeline.index_data(
+        knowledge_base="kb_keys",
+        file_id="file-keys",
+        document=document,
+        config=config,
+        file_name="with-image.md",
+    )
+    hits = pipeline.search_data(knowledge_base="kb_keys", query="布局图", top_k=3)
+    text_hits = [h for h in hits if h.citation.get("type") != "image"]
+    assert text_hits
+    assert text_hits[0].citation.get("storage_key") == storage_key
 
 
 def test_multimodal_skips_images_when_vlm_disabled(tmp_path: Path) -> None:

@@ -4,6 +4,7 @@ from app.services.rag.parsing.md_parser import MarkdownDocumentParser
 from app.services.rag.parsing.pdf_parser import PdfDocumentParser
 from app.services.rag.parsing.pptx_parser import PptxDocumentParser
 from app.services.rag.parsing.txt_parser import TxtDocumentParser
+from app.services.rag.parsing.web_parser import WebUrlDocumentParser
 
 _PARSERS: tuple[DocumentParser, ...] = (
     TxtDocumentParser(),
@@ -31,4 +32,5 @@ __all__ = [
     "DocxDocumentParser",
     "PptxDocumentParser",
     "get_parser_for",
+    "WebUrlDocumentParser",
 ]

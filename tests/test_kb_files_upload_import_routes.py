@@ -115,6 +115,7 @@ def domain_client(
         settings=upload_settings,
         upload_repository=upload_repo,
         knowledge_base_repository=repository,
+        rag_pipeline=rag_pipeline,
         dev_upload_url_base="http://testserver",
     )
 

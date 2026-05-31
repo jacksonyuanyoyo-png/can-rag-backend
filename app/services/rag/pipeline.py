@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
+from typing import Any
 from uuid import uuid4
 
 from app.core.config import Settings
-from app.domain.import_job import ChunkingConfig
+from app.domain.import_job import ChunkingConfig, ImportJobStage
 from app.domain.knowledge_base import DocumentMetadata, SearchHit
 from app.services.rag.chunker import TextChunker
 from app.services.rag.chunking_service import ChunkingService
+from app.services.rag.parsing.md_parser import extract_image_storage_keys
 from app.services.rag.embedder import HashEmbeddingService
 from app.services.rag.kb_embedding import EmbedderFactory, KbEmbeddingConfig, resolve_kb_embedding_config
 from app.services.rag.parsing.base import ParsedDocument
@@ -139,7 +142,11 @@ class _HashRagPipeline:
         config: ChunkingConfig,
         file_name: str,
         embedding_config: KbEmbeddingConfig | None = None,
+        force_image_description: bool = False,
+        on_progress: Callable[[ImportJobStage, float], None] | None = None,
     ) -> dict[str, int]:
+        if on_progress is not None:
+            on_progress(ImportJobStage.CHUNK, 0.0)
         embedder = self._embedder_factory.get(
             embedding_config or self._default_embedding_config
         )
@@ -149,24 +156,45 @@ class _HashRagPipeline:
             file_name=file_name,
             data_id_of=lambda chunk: f"d{chunk.chunk_index:06d}",
         )
-        data_records = [
-            DataRecord(
-                knowledge_base=knowledge_base,
-                file_id=file_id,
-                data_id=f"d{chunk.chunk_index:06d}",
-                text=chunk.text,
-                page=chunk.page,
-                chunk_index=chunk.chunk_index,
-                citation={
-                    "file_name": file_name,
-                    "page": chunk.page,
-                    "data_id": f"d{chunk.chunk_index:06d}",
-                },
+        if on_progress is not None:
+            on_progress(ImportJobStage.CHUNK, 1.0)
+            on_progress(ImportJobStage.EMBED, 0.0)
+        data_records = []
+        for chunk in data_chunks:
+            citation: dict[str, Any] = {
+                "file_name": file_name,
+                "page": chunk.page,
+                "data_id": f"d{chunk.chunk_index:06d}",
+            }
+            image_keys = extract_image_storage_keys(chunk.text)
+            if image_keys:
+                citation["storage_key"] = image_keys[0]
+                if len(image_keys) > 1:
+                    citation["storage_keys"] = image_keys
+            data_records.append(
+                DataRecord(
+                    knowledge_base=knowledge_base,
+                    file_id=file_id,
+                    data_id=f"d{chunk.chunk_index:06d}",
+                    text=chunk.text,
+                    page=chunk.page,
+                    chunk_index=chunk.chunk_index,
+                    citation=citation,
+                )
             )
-            for chunk in data_chunks
-        ]
         index_texts = [index_chunk.text for index_chunk in index_chunks]
-        index_vectors = embedder.embed_many(index_texts) if index_texts else []
+        index_vectors: list[list[float]] = []
+        if index_texts:
+            batch_size = 32
+            for offset in range(0, len(index_texts), batch_size):
+                batch = index_texts[offset : offset + batch_size]
+                index_vectors.extend(embedder.embed_many(batch))
+                if on_progress is not None:
+                    done = min(offset + len(batch), len(index_texts))
+                    on_progress(
+                        ImportJobStage.EMBED,
+                        done / len(index_texts),
+                    )
         index_records = [
             IndexRecord(
                 knowledge_base=knowledge_base,
@@ -178,6 +206,8 @@ class _HashRagPipeline:
             )
             for index_chunk, vector in zip(index_chunks, index_vectors, strict=True)
         ]
+        if on_progress is not None:
+            on_progress(ImportJobStage.INDEX, 0.0)
         images_indexed = 0
         if document.images:
             for i, image in enumerate(document.images):
@@ -190,7 +220,8 @@ class _HashRagPipeline:
                 desc = self._vlm.describe_image(
                     image_bytes,
                     mime_type=mime,
-                    hint="文档图片/流程图",
+                    hint="文档页面图示：键位布局、功能说明、流程图或表格要点",
+                    force=force_image_description,
                 )
                 if desc is None:
                     continue
@@ -230,6 +261,8 @@ class _HashRagPipeline:
             data_records=data_records,
             index_records=index_records,
         )
+        if on_progress is not None:
+            on_progress(ImportJobStage.INDEX, 1.0)
         return {
             "data": len(data_records),
             "index": len(index_records),
@@ -451,6 +484,11 @@ class RagPipeline:
     def delete_document(self, knowledge_base: str, document_id: str) -> None:
         self._impl.delete_document(knowledge_base, document_id)
 
+    def clear_file_index(self, knowledge_base: str, file_id: str) -> None:
+        vector_store = getattr(self._impl, "_vector_store", None)
+        if vector_store is not None and hasattr(vector_store, "delete_file"):
+            vector_store.delete_file(knowledge_base, file_id)
+
     def delete_knowledge_base(self, knowledge_base: str) -> None:
         self._impl.delete_knowledge_base(knowledge_base)
 
@@ -472,6 +510,8 @@ class RagPipeline:
         config: ChunkingConfig,
         file_name: str,
         embedding_config: KbEmbeddingConfig | None = None,
+        force_image_description: bool = False,
+        on_progress: Callable[[ImportJobStage, float], None] | None = None,
     ) -> dict[str, int]:
         if not hasattr(self._impl, "index_data"):
             raise NotImplementedError("当前 RAG_BACKEND 不支持 index_data")
@@ -482,6 +522,8 @@ class RagPipeline:
             config=config,
             file_name=file_name,
             embedding_config=embedding_config,
+            force_image_description=force_image_description,
+            on_progress=on_progress,
         )
 
     def search_data(

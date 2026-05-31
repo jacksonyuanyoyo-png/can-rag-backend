@@ -21,17 +21,29 @@ class Settings(BaseSettings):
     OPENAI_VECTOR_STORE_NAME: str = "default-rag-store"
     VLM_ENABLED: bool = False
     VLM_MODEL: str = "gpt-4o-mini"
-    VLM_TIMEOUT_SECONDS: float = 60.0
+    PDF_VLM_MODEL: str = "gpt-4o"
+    VLM_TIMEOUT_SECONDS: float = 120.0
     VLM_MIN_IMAGE_BYTES: int = 5120
     VLM_MAX_IMAGE_BYTES: int = 8_000_000
+    VLM_MAX_PDF_BYTES: int = 20_000_000
     PDF_AUTO_ENHANCE_MIN_CHARS: int = 100
-    PDF_RENDER_DPI: int = 150
+    PDF_VLM_MIN_MARKDOWN_CHARS: int = 80
+    PDF_RENDER_DPI: int = 200
     DATABASE_URL: str = ""
 
     LOCAL_UPLOAD_ROOT: str = str(_PROJECT_ROOT / "app" / "storage" / "uploads")
     LOCAL_METADATA_PATH: str = str(_PROJECT_ROOT / "app" / "storage" / "metadata" / "knowledge_bases.json")
     LOCAL_VECTOR_STORE_PATH: str = str(_PROJECT_ROOT / "app" / "storage" / "vector_store")
     HTTP_TIMEOUT_SECONDS: float = 60.0
+
+    WEB_FETCH_MAX_BYTES: int = 5_242_880
+    WEB_FETCH_TIMEOUT_SECONDS: float = 30.0
+    WEB_MIN_CONTENT_CHARS: int = 200
+    WEB_LINK_DENSITY_MAX: float = 0.35
+    WEB_ENABLE_BROWSER_FALLBACK: bool = True
+    WEB_USER_AGENT: str = (
+        "Mozilla/5.0 (compatible; CAN-RAG/1.0; +https://www.fidelity.ca)"
+    )
 
     DEFAULT_MAX_TOKENS: int = 4096
     RAG_CHUNK_SIZE: int = 800

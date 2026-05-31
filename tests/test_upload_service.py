@@ -17,6 +17,7 @@ from app.domain.upload import (
 )
 from app.repositories.knowledge_base_repository import KnowledgeBaseRepository
 from app.repositories.upload_repository import UploadRepository
+from app.services.rag.pipeline import RagPipeline
 from app.services.upload_service import UploadService
 
 
@@ -97,6 +98,54 @@ def test_presign_and_complete_flow(upload_service: UploadService) -> None:
 
     local_path = upload_service._local_storage_path(item.storage_key)
     assert local_path.exists()
+
+
+def test_presign_replaces_existing_file_by_name(
+    upload_service: UploadService,
+) -> None:
+    kb_id = f"kb_{uuid4().hex[:8]}"
+    user_id = f"user_{uuid4().hex[:8]}"
+    file_input = PresignFileInput(
+        file_name="manual.pdf",
+        mime_type="application/pdf",
+        size_bytes=1024,
+    )
+
+    first = upload_service.presign(
+        knowledge_base_id=kb_id,
+        user_id=user_id,
+        files=[file_input],
+    )[0]
+    upload_service.complete(
+        upload_id=first.upload_id,
+        file_id=first.file_id,
+        storage_key=first.storage_key,
+        user_id=user_id,
+    )
+
+    second = upload_service.presign(
+        knowledge_base_id=kb_id,
+        user_id=user_id,
+        files=[
+            PresignFileInput(
+                file_name="manual.pdf",
+                mime_type="application/pdf",
+                size_bytes=2048,
+            )
+        ],
+    )[0]
+
+    assert second.replaced is True
+    assert second.file_id == first.file_id
+    assert second.storage_key == first.storage_key
+
+    completed = upload_service.complete(
+        upload_id=second.upload_id,
+        file_id=second.file_id,
+        storage_key=second.storage_key,
+        user_id=user_id,
+    )
+    assert completed.file_id == first.file_id
 
 
 def test_presign_rejects_unsupported_type(upload_service: UploadService) -> None:

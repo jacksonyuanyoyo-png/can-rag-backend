@@ -10,12 +10,14 @@ from psycopg.rows import dict_row
 
 from app.core.config import Settings
 from app.core.database import normalize_psycopg_url
-from app.domain.import_job import ChunkingConfig, ImportJob, ImportJobFileStatus
+from app.domain.import_job import ChunkingConfig, ImportJob, ImportJobFileStatus, ImportJobStage
+from app.services.import_job_progress import ImportJobProgressReporter
 from app.repositories.import_job_repository import ImportJobRepository
 from app.repositories.knowledge_base_repository import KnowledgeBaseRepository
 from app.services.import_job_worker import FileProcessor, ImportJobWorker
 from app.services.rag.kb_embedding import resolve_kb_embedding_config
 from app.services.rag.parsing import get_parser_for
+from app.services.rag.parsing.image_store import ImageStore
 from app.services.rag.parsing.pdf_to_markdown import parse_pdf_with_options
 from app.services.rag.pipeline import RagPipeline
 from app.services.rag.vlm_service import VlmService
@@ -97,13 +99,33 @@ def build_process_file(
 ) -> FileProcessor:
     vlm_service = VlmService(settings)
 
-    def process_file(*, job: ImportJob, file_id: str) -> int:
+    def process_file(
+        *,
+        job: ImportJob,
+        file_id: str,
+        file_index: int,
+        progress: ImportJobProgressReporter,
+    ) -> int:
         file_name, path = resolver(kb_id=job.kb_id, file_id=file_id)
         cfg_dict = jobs.get_chunking_config(job.id)
         config = (
             ChunkingConfig.from_dict(cfg_dict)
             if cfg_dict
             else _DEFAULT_CHUNKING
+        )
+
+        def on_pdf_page(current_page: int, total_pages: int) -> None:
+            progress.report_parse_page(
+                file_index=file_index,
+                current_page=current_page,
+                total_pages=total_pages,
+            )
+
+        progress.report_stage(
+            ImportJobStage.PARSE,
+            file_index=file_index,
+            fraction=0.0,
+            force=True,
         )
         if file_name.lower().endswith(".pdf"):
             document = parse_pdf_with_options(
@@ -112,6 +134,8 @@ def build_process_file(
                 pdf_enhancement=config.parsing.pdf_enhancement,
                 settings=settings,
                 vlm_service=vlm_service,
+                image_store=ImageStore(settings.upload_root_resolved),
+                on_page_progress=on_pdf_page,
             )
             if config.parsing.pdf_enhancement:
                 config = ChunkingConfig.from_dict(
@@ -121,9 +145,25 @@ def build_process_file(
             parser = get_parser_for(file_name)
             if parser is None:
                 raise ValueError(f"不支持的文件类型: {file_name}")
+            progress.report_stage(
+                ImportJobStage.PARSE,
+                file_index=file_index,
+                fraction=0.5,
+            )
             document = parser.parse(path)
+        progress.report_stage(
+            ImportJobStage.PARSE,
+            file_index=file_index,
+            fraction=1.0,
+            force=True,
+        )
+
         metadata = kb_repository.get_by_id(job.kb_id)
         embedding_config = resolve_kb_embedding_config(settings, metadata)
+
+        def on_pipeline_progress(stage: ImportJobStage, fraction: float) -> None:
+            progress.report_stage(stage, file_index=file_index, fraction=fraction)
+
         result = pipeline.index_data(
             knowledge_base=job.kb_id,
             file_id=file_id,
@@ -131,6 +171,8 @@ def build_process_file(
             config=config,
             file_name=file_name,
             embedding_config=embedding_config,
+            force_image_description=config.parsing.pdf_enhancement,
+            on_progress=on_pipeline_progress,
         )
         return int(result["data"])
 

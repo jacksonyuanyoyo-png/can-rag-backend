@@ -15,6 +15,7 @@ from app.api.v1.knowledge_base_hit_test import hit_test_router
 from app.api.v1.model_routes import model_router
 from app.api.v1.template_routes import template_router
 from app.api.v1.upload_routes import upload_router
+from app.api.v1.web_import_routes import web_import_router
 from app.core.bootstrap import wire_app_state
 from app.core.config import get_settings
 from app.core.exception_handlers import register_exception_handlers
@@ -29,6 +30,7 @@ V1_ROUTERS = (
     knowledge_base_router,
     hit_test_router,
     upload_router,
+    web_import_router,
     kb_import_job_router,
     import_job_router,
 )

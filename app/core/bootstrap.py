@@ -32,11 +32,13 @@ from app.services.model_service import ModelService
 from app.services.rag.pipeline import RagPipeline
 from app.services.template_service import TemplateService
 from app.services.upload_service import UploadService
+from app.services.web_import_service import WebImportService
 
 _DB_DEPENDENT_STATE_KEYS = (
     "template_service",
     "folder_service",
     "upload_service",
+    "web_import_service",
     "idempotency_repository",
     "import_job_service",
 )
@@ -116,6 +118,7 @@ def _wire_database_services(
         settings=settings,
         upload_repository=upload_repository,
         knowledge_base_repository=kb_repository,
+        rag_pipeline=rag_pipeline,
     )
 
     idempotency_repository = IdempotencyRepository(database_url)
@@ -124,9 +127,17 @@ def _wire_database_services(
 
     import_job_repository = ImportJobRepository(database_url)
     import_job_repository.ensure_schema()
-    app.state.import_job_service = ImportJobService(
+    import_job_service = ImportJobService(
         import_job_repository=import_job_repository,
         idempotency_repository=idempotency_repository,
+    )
+    app.state.import_job_service = import_job_service
+
+    app.state.web_import_service = WebImportService(
+        settings=settings,
+        upload_repository=upload_repository,
+        knowledge_base_repository=kb_repository,
+        import_job_service=import_job_service,
     )
 
     resolver = KbFileResolver(settings)

@@ -2,7 +2,7 @@
 
 > **受众**：前端工程师  
 > **Base URL（本地）**：`http://127.0.0.1:8000`  
-> **更新**：2026-05-30（含 embedding 模型、KB 文件列表修复）  
+> **更新**：2026-05-31（含原文对照 Markdown 图片展示 `uploads/assets`）  
 > **约定**：请求/响应 JSON 字段均为 **camelCase**；时间戳为 ISO 8601（UTC，`Z` 后缀）。
 
 ---
@@ -99,6 +99,7 @@ Refresh Token 通过 **HttpOnly Cookie** 下发（`/v1/auth/refresh`）。
 | 模块 | 路径前缀 | 权限示例 |
 |------|----------|----------|
 | 上传 | `/v1/uploads/*` | `kb:file:upload` |
+| 网页导入 | `/v1/knowledge-bases/{kbId}/web-imports` | `kb:file:upload` |
 | 导入任务 | `/v1/knowledge-bases/{kbId}/import-jobs`、`/v1/import-jobs/*` | `kb:import` |
 | 文件夹 | `/v1/folders/*` | `folder:read` / `folder:write` |
 | 模板 | `/v1/templates/*` | `template:read` / `template:write` |
@@ -116,8 +117,9 @@ Refresh Token 通过 **HttpOnly Cookie** 下发（`/v1/auth/refresh`）。
 ```text
 GET embedding-models + GET models（对话）
   → 登录 → 创建 KB（带 embeddingModelId）
-  → presign → 本地落盘 → complete
-  → 创建 import-job → 轮询 job 状态
+  → 方式 A：presign → 本地落盘 → complete → 创建 import-job
+  → 方式 B：POST web-imports（抓取网页 → 落盘 .md → 可选自动 import-job）
+  → 轮询 job 状态
   → GET files / list chunks → hit-test
   → 创建 conversation → messages:stream（带 knowledgeBaseIds）
 ```
@@ -332,6 +334,129 @@ Content-Type: application/json
   "requestId": "req_..."
 }
 ```
+
+### 5.3.1 网页 URL 导入（Web Import）
+
+从公网 URL 抓取 HTML、抽取正文为 Markdown、注册知识库文件，并可一步创建导入任务。抽取为**通用管线**（Trafilatura → Readability 兜底 → 可选 Playwright 渲染），无站点定制选择器。
+
+```http
+POST /v1/knowledge-bases/{kbId}/web-imports
+Authorization: Bearer {token}
+Content-Type: application/json
+Idempotency-Key: {optional}
+```
+
+**请求体**：
+
+| 字段 | 类型 | 必填 | 默认 | 说明 |
+|------|------|------|------|------|
+| `url` | string (URL) | 是 | — | 仅支持 `http`/`https`；禁止 localhost 与内网地址（SSRF 防护） |
+| `autoImport` | boolean | 否 | `true` | 为 `true` 时自动创建 `import-job` 并在后台执行 |
+| `useBrowserFallback` | boolean | 否 | 服务端 `WEB_ENABLE_BROWSER_FALLBACK` | 静态 HTML 抽取质量不足时，用 Playwright 渲染后再抽 |
+| `chunkStrategy` | string | 否 | `default` | 与 import-jobs 一致；有 `chunking` 时被覆盖 |
+| `chunking` | object | 否 | — | 与 **§6** `import-jobs` 的 `chunking` 结构相同 |
+| `parsing` | object | 否 | — | 含 `webUseBrowserFallback`（与 `useBrowserFallback` 二选一，请求级优先） |
+
+**推荐请求（Insights 类文章页）**：
+
+```json
+{
+  "url": "https://www.fidelity.ca/en/insights/articles/government-grants-resp/",
+  "autoImport": true,
+  "useBrowserFallback": false,
+  "chunking": {
+    "strategy": "default",
+    "indexSize": 512,
+    "metadata": {
+      "includeFileName": true,
+      "includeHeadings": true
+    }
+  },
+  "parsing": {
+    "webUseBrowserFallback": false
+  }
+}
+```
+
+**响应 201**：
+
+```json
+{
+  "data": {
+    "fileId": "file_a1b2c3d4e5f6",
+    "fileName": "Heres-how-to-get-government-grants-into-your-RESP.md",
+    "storageKey": "kb/{kbId}/file_a1b2c3d4e5f6.md",
+    "sourceUrl": "https://www.fidelity.ca/en/insights/articles/government-grants-resp/",
+    "extractionMethod": "trafilatura",
+    "importJobId": "job_7c8d9e0f"
+  },
+  "requestId": "req_..."
+}
+```
+
+| 响应字段 | 说明 |
+|----------|------|
+| `fileId` | 知识库文件 ID，后续 chunks / hit-test / citation 使用 |
+| `fileName` | 由页面标题或 URL 路径生成的 `.md` 文件名；重名时自动加 `-2`、`-3` 后缀 |
+| `storageKey` | 落盘路径，形如 `kb/{kbId}/{fileId}.md` |
+| `sourceUrl` | 抓取后的最终 URL（含重定向） |
+| `extractionMethod` | `trafilatura` / `readability` / `browser+trafilatura` 等 |
+| `importJobId` | `autoImport=true` 且服务已装配 worker 时返回；否则省略 |
+
+**后端行为摘要**：
+
+1. 校验 URL → `httpx` 抓取 HTML（默认最大 5MB，超时 30s）
+2. Trafilatura 抽正文为 Markdown；质量门禁不通过则 Readability
+3. 仍不通过且开启浏览器兜底时，Playwright 渲染后再抽（需服务端安装 `playwright`）
+4. 写入 `{LOCAL_UPLOAD_ROOT}/{storageKey}`，MIME 为 `text/markdown`
+5. 插入 `t_dim_kb_file`，状态 `uploaded`
+6. `autoImport=true` 时创建 import-job（分段配置与 **§6** 相同），后台 `run_job`
+
+**与文件上传流程对比**：
+
+| 步骤 | 文件上传 | 网页导入 |
+|------|----------|----------|
+| 获取 fileId | presign | web-imports 响应 |
+| 写入存储 | 客户端 PUT 到 dev-upload | 服务端自动写入 |
+| 触发索引 | 手动 POST import-jobs | `autoImport: true` 时自动 |
+
+**常见错误**：
+
+| code | HTTP | 场景 |
+|------|------|------|
+| `IMPORT_PARSE_FAILED` | 400 | URL 非法、抓取失败、正文过短、不支持的内容类型 |
+| `FILE_DUPLICATED` | 409 | 同名文件已存在（自动重命名前若冲突） |
+| `KB_NOT_FOUND` | 404 | 知识库不存在 |
+| `AUTH_FORBIDDEN` | 403 | 无 `kb:file:upload` |
+
+**环境变量（服务端）**：
+
+```env
+WEB_FETCH_MAX_BYTES=5242880
+WEB_FETCH_TIMEOUT_SECONDS=30
+WEB_MIN_CONTENT_CHARS=200
+WEB_LINK_DENSITY_MAX=0.35
+WEB_ENABLE_BROWSER_FALLBACK=true
+# 动态页兜底（可选）: pip install playwright && playwright install chromium
+```
+
+**curl 示例**：
+
+```bash
+curl -s -X POST "$BASE/v1/knowledge-bases/$KB_ID/web-imports" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://www.fidelity.ca/en/insights/articles/government-grants-resp/",
+    "autoImport": true,
+    "chunking": {
+      "strategy": "default",
+      "metadata": { "includeFileName": true, "includeHeadings": true }
+    }
+  }' | jq .
+```
+
+`autoImport=true` 时，用响应中的 `importJobId` 轮询 **§5.5** `GET /v1/import-jobs/{jobId}`，直至 `status=completed`。
 
 ### 5.4 创建导入任务
 
@@ -577,7 +702,7 @@ data: {}
 | `snippet` | string | 召回片段 |
 | `fileName` | string | 文件名 |
 | `type` | `"text"` \| `"image"` | 文本块或图片描述 |
-| `storageKey` | string? | 图片资源键（`type=image` 时） |
+| `storageKey` | string? | 图片资源键：`type=image` 时必有；文本 chunk 内含 Markdown 图片路径（kb_images/ 前缀）时也可能带首图 key，用于缩略图/深链 |
 
 ### 8.2 原文对照深链（前端路由建议）
 
@@ -644,6 +769,175 @@ GET /v1/knowledge-bases/{kbId}/files/{fileId}/chunks/d000000?context=2
 GET /v1/knowledge-bases/{kbId}/files/{fileId}
 ```
 
+### 9.4 原文对照：Markdown 图片如何展示（PDF 增强）
+
+PDF 开启 `pdfEnhancement` 后，切片与落盘 Markdown 中会出现 **标准 Markdown 图片语法**，路径为后端 `storage_key`，**不是**完整 HTTP URL：
+
+```text
+（切片 text 示例，两行）
+第1行：Markdown 图片 — alt=Page 1，url=kb_images/385be452-6ea1-4c0f-9268-549ffaffca03.png
+第2行：**图示内容**：键位布局：84 键紧凑排列……
+```
+
+若前端用纯文本渲染，用户只会看到「Markdown 图片行 + kb_images/ 路径」原文（见联调截图）。**必须**用 Markdown 渲染器，并把 `kb_images/...` 解析为资源 API 地址。
+
+#### 9.4.1 图片资源 API
+
+```http
+GET /v1/uploads/assets/{storagePath}
+```
+
+| 项 | 说明 |
+|----|------|
+| `storagePath` | 与 Markdown 括号内一致，例如 `kb_images/385be452-6ea1-4c0f-9268-549ffaffca03.png`；路径含 `/` 时按段 `encodeURIComponent` |
+| 鉴权 | 当前实现 **不要求** `Authorization`（与 presign/complete 不同）；若后续加固，请与后端确认后统一在 `<img>` 请求中带 Bearer |
+| 成功 | `200`，`Content-Type` 为 `image/png` 等 |
+| 失败 | `404` + `RESOURCE_NOT_FOUND`（文件未落盘或 key 错误） |
+
+**完整 URL 示例**（本地）：
+
+```text
+http://127.0.0.1:8000/v1/uploads/assets/kb_images/385be452-6ea1-4c0f-9268-549ffaffca03.png
+```
+
+#### 9.4.2 推荐：统一解析函数
+
+在应用内配置 `apiBase`（与联调 Base URL 相同），所有 Markdown / citation 图片都走同一函数：
+
+```typescript
+/** Markdown 图片 src → 可请求的 URL */
+export function resolveUploadAssetUrl(
+  apiBase: string,
+  src: string | undefined | null
+): string | null {
+  if (!src?.trim()) return null;
+  const trimmed = src.trim();
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  if (trimmed === "placeholder" || trimmed === "{placeholder}") return null;
+  const key = trimmed.startsWith("/") ? trimmed.slice(1) : trimmed;
+  if (!key.startsWith("kb_images/") && !key.startsWith("kb/")) return null;
+  const base = apiBase.replace(/\/$/, "");
+  const encoded = key.split("/").map((seg) => encodeURIComponent(seg)).join("/");
+  return `${base}/v1/uploads/assets/${encoded}`;
+}
+```
+
+> `kb/` 前缀用于将来扩展；当前 PDF 增强页图均在 `kb_images/{uuid}.png`。
+
+#### 9.4.3 React（react-markdown）绑定示例
+
+```tsx
+import ReactMarkdown from "react-markdown";
+
+type Props = { markdown: string; apiBase: string };
+
+export function KbMarkdownPreview({ markdown, apiBase }: Props) {
+  return (
+    <ReactMarkdown
+      components={{
+        img: ({ src, alt }) => {
+          const url = resolveUploadAssetUrl(apiBase, src);
+          if (!url) {
+            return (
+              <span className="text-muted" title={src ?? ""}>
+                [{alt ?? "图片"}]
+              </span>
+            );
+          }
+          return (
+            <img
+              src={url}
+              alt={alt ?? ""}
+              loading="lazy"
+              style={{ maxWidth: "100%", height: "auto" }}
+            />
+          );
+        },
+      }}
+    >
+      {markdown}
+    </ReactMarkdown>
+  );
+}
+```
+
+#### 9.4.4 Vue 3 绑定思路
+
+使用 `markdown-it` + 自定义 `image` 规则，或在渲染后对 `img[src^="kb_images/"]` 批量改写 `src`：
+
+```typescript
+import MarkdownIt from "markdown-it";
+
+const md = new MarkdownIt();
+const defaultRender =
+  md.renderer.rules.image ??
+  ((tokens, idx, options, _env, self) =>
+    self.renderToken(tokens, idx, options));
+
+md.renderer.rules.image = (tokens, idx, options, env, self) => {
+  const src = tokens[idx].attrGet("src");
+  const resolved = resolveUploadAssetUrl(env.apiBase, src);
+  if (resolved) tokens[idx].attrSet("src", resolved);
+  return defaultRender(tokens, idx, options, env, self);
+};
+
+// 渲染：md.render(text, { apiBase })
+```
+
+#### 9.4.5 文件预览三栏如何接 API
+
+| UI 区域 | 建议数据源 | 渲染方式 |
+|---------|------------|----------|
+| **原文对照**（左） | 优先：同目录增强稿 `GET` 文件详情拿到路径后读 `{fileId}.md`（与 PDF 同目录）；或按页合并 chunks 的 `text` | `KbMarkdownPreview`，勿 `white-space: pre` 裸显 |
+| **切片信息**（中） | `GET .../files/{fileId}/chunks` → `data[].text` | 每条切片卡片内同样 `KbMarkdownPreview` |
+| **切片知识点**（右） | `GET .../chunks/{dataId}?context=1` → `data.target.text` | 同上 |
+
+列表接口片段示例（字段以实际为准）：
+
+```json
+{
+  "dataId": "d000000",
+  "text": "<Markdown 图片行 kb_images/385be452-....png>\\n\\n**图示内容**：\\n……",
+  "page": 1,
+  "citation": {
+    "file_name": "Mini84....pdf",
+    "page": 1,
+    "data_id": "d000000",
+    "storage_key": "kb_images/385be452-6ea1-4c0f-9268-549ffaffca03.png"
+  }
+}
+```
+
+`citation.storage_key`（JSON 为 snake_case，SSE citations 为 camelCase `storageKey`）可在**不解析 Markdown** 时直接用作缩略图：
+
+```typescript
+const thumbUrl = citation.storageKey
+  ? resolveUploadAssetUrl(apiBase, citation.storageKey)
+  : null;
+```
+
+#### 9.4.6 对话引用中的配图
+
+流式/同步消息的 `citations[]` 在 `type === "image"` 或带 `storageKey` 时，侧边引用卡建议：
+
+1. `snippet` 展示文字（含 **图示内容** 要点）；
+2. `storageKey` → `resolveUploadAssetUrl` → `<img>` 缩略图；
+3. 点击跳转原文对照深链（§8.2）：`/knowledge-bases/{kbId}/files/{fileId}/chunks/{chunkId}`。
+
+#### 9.4.7 联调自检
+
+```bash
+# 将 KEY 换成切片里括号中的路径
+curl -sI "http://127.0.0.1:8000/v1/uploads/assets/kb_images/385be452-6ea1-4c0f-9268-549ffaffca03.png" | head -5
+# 期望 HTTP/1.1 200 与 image/png
+```
+
+| 现象 | 处理 |
+|------|------|
+| 仍显示 Markdown 图片原文（kb_images 路径） | 未走 Markdown 渲染，或 img 组件未改写 src |
+| 图片裂图 404 | import 未完成、旧任务仍是 `placeholder`、或 key 与落盘不一致 → 重新导入并确认 `app/storage/uploads/kb_images/` 存在该文件 |
+| `placeholder` | 历史数据，需对该 PDF 重新 `pdfEnhancement: true` 导入 |
+
 ---
 
 ## 10. Hit-Test 接口
@@ -697,6 +991,7 @@ Content-Type: application/json
 | `KB_NOT_FOUND` | 404 | 知识库不存在 |
 | `FILE_NOT_FOUND` | 404 | 文件不存在 |
 | `IMPORT_JOB_NOT_FOUND` | 404 | 导入任务不存在 |
+| `IMPORT_PARSE_FAILED` | 400 | 网页抓取/正文抽取失败 |
 | `IMPORT_INVALID_OPTIONS` | 400 | 分段参数非法 |
 | `IMPORT_CONCURRENCY_LIMIT` | 409 | 并发导入超限 |
 | `KB_HAS_RUNNING_IMPORT` | 409 | KB 已有运行中任务 |
@@ -810,7 +1105,10 @@ console.log(hit.data.results);
 | 文件落盘路径 | `storageKey` 形如 `kb/{kbId}/{fileId}.pdf`，非 `{知识库名称}/` 目录 |
 | presign 后 404 | 需将文件写入 `app/storage/uploads/{storageKey}` |
 | import 一直 queued | 检查 `DATABASE_URL`、Postgres、Poller 日志 |
+| 网页导入失败 | 确认 URL 为公网 https；查看 `IMPORT_PARSE_FAILED` 详情；SPA 页可设 `useBrowserFallback: true` |
+| 网页导入无 importJobId | `autoImport=false` 或未配置 `DATABASE_URL` / worker；需手动 POST import-jobs |
 | 无 citation | 确认 `knowledgeBaseIds` 非空且 import 已完成 |
+| 原文对照只显示 Markdown 图片原文 | 按 **§9.4** 用 `/v1/uploads/assets/` 渲染 Markdown 图片 |
 | OpenAI 错误 | 检查 `OPENAI_API_KEY` 与 embedding 维度配置 |
 
 **环境变量（真实 OpenAI 向量）**：

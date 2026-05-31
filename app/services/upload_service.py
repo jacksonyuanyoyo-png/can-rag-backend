@@ -22,6 +22,7 @@ from app.domain.upload import (
 )
 from app.repositories.knowledge_base_repository import KnowledgeBaseRepository
 from app.repositories.upload_repository import UploadRepository
+from app.services.rag.pipeline import RagPipeline
 
 
 @dataclass(slots=True)
@@ -33,6 +34,7 @@ class PresignUploadResult:
     headers: dict[str, str]
     storage_key: str
     expires_at: datetime
+    replaced: bool = False
 
     def to_api_dict(self) -> dict[str, object]:
         return {
@@ -43,6 +45,7 @@ class PresignUploadResult:
             "headers": self.headers,
             "storageKey": self.storage_key,
             "expiresAt": self.expires_at.isoformat().replace("+00:00", "Z"),
+            "replaced": self.replaced,
         }
 
 
@@ -67,12 +70,14 @@ class UploadService:
         settings: Settings,
         upload_repository: UploadRepository,
         knowledge_base_repository: KnowledgeBaseRepository | None = None,
+        rag_pipeline: RagPipeline | None = None,
         dev_upload_url_base: str = DEFAULT_LOCAL_DEV_UPLOAD_URL_BASE,
         presign_ttl_seconds: int = DEFAULT_PRESIGN_TTL_SECONDS,
     ) -> None:
         self._settings = settings
         self._upload_repository = upload_repository
         self._knowledge_base_repository = knowledge_base_repository
+        self._rag_pipeline = rag_pipeline
         self._dev_upload_url_base = dev_upload_url_base.rstrip("/")
         self._presign_ttl_seconds = presign_ttl_seconds
 
@@ -106,24 +111,21 @@ class UploadService:
         results: list[PresignUploadResult] = []
         for file_input in files:
             self._validate_file_input(file_input)
-            if self._upload_repository.get_kb_file_by_name(
+            existing = self._upload_repository.get_kb_file_by_name(
                 knowledge_base_id,
-                file_input.file_name,
-            ):
-                raise BusinessError(
-                    ErrorCode.FILE_DUPLICATED,
-                    details={
-                        "knowledgeBaseId": knowledge_base_id,
-                        "fileName": file_input.file_name,
-                    },
-                )
-
-            file_id = f"file_{uuid4().hex}"
-            storage_key = build_storage_key(
-                knowledge_base_id,
-                file_id,
                 file_input.file_name,
             )
+            replaced = existing is not None
+            if replaced:
+                file_id = existing.id
+                storage_key = existing.storage_key
+            else:
+                file_id = f"file_{uuid4().hex}"
+                storage_key = build_storage_key(
+                    knowledge_base_id,
+                    file_id,
+                    file_input.file_name,
+                )
             upload_id = f"upl_{uuid4().hex}"
             upload_url = build_local_dev_upload_url(
                 upload_id,
@@ -132,6 +134,10 @@ class UploadService:
             expires_at = presign_expires_at(ttl_seconds=self._presign_ttl_seconds)
 
             self._prepare_local_storage_path(storage_key)
+            if replaced:
+                self._upload_repository.delete_upload_sessions_for_storage_key(
+                    storage_key
+                )
 
             upload = self._upload_repository.create_upload_object(
                 kb_id=knowledge_base_id,
@@ -155,6 +161,7 @@ class UploadService:
                     headers={"Content-Type": file_input.mime_type},
                     storage_key=storage_key,
                     expires_at=expires_at,
+                    replaced=replaced,
                 )
             )
 
@@ -212,7 +219,8 @@ class UploadService:
                 details={"uploadId": upload_id, "storageKey": storage_key},
             )
 
-        if self._upload_repository.get_kb_file(file_id) is None:
+        existing_file = self._upload_repository.get_kb_file(file_id)
+        if existing_file is None:
             self._upload_repository.create_kb_file(
                 kb_id=upload.kb_id,
                 file_id=file_id,
@@ -222,6 +230,15 @@ class UploadService:
                 storage_key=storage_key,
                 status="uploaded",
             )
+        else:
+            self._upload_repository.update_kb_file(
+                file_id=file_id,
+                mime_type=upload.mime_type,
+                size_bytes=upload.size_bytes,
+                status="uploaded",
+            )
+            self._clear_file_index(upload.kb_id, file_id)
+            self._remove_stale_enhanced_markdown(storage_key)
 
         self._ensure_local_upload_placeholder(storage_key)
 
@@ -306,3 +323,16 @@ class UploadService:
                 details={"storageKey": storage_key},
             )
         return self._settings.upload_root_resolved / relative
+
+    def _clear_file_index(self, kb_id: str, file_id: str) -> None:
+        if self._rag_pipeline is None:
+            return
+        self._rag_pipeline.clear_file_index(kb_id, file_id)
+
+    def _remove_stale_enhanced_markdown(self, storage_key: str) -> None:
+        path = Path(storage_key)
+        if path.suffix.lower() != ".pdf":
+            return
+        markdown_path = self._local_storage_path(path.with_suffix(".md").as_posix())
+        if markdown_path.exists():
+            markdown_path.unlink()

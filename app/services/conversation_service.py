@@ -598,14 +598,24 @@ class ConversationService:
         messages: list[dict[str, str]] = []
         if citations:
             blocks: list[str] = []
+            has_figures = any(citation.get("storageKey") for citation in citations)
             for citation in citations:
                 page = citation.get("page")
                 page_suffix = f" 第{page}页" if page is not None else ""
                 file_name = citation.get("fileName") or ""
+                figure_note = ""
+                if citation.get("storageKey"):
+                    figure_note = "（含页面图示，回答可写「见图[n]」）"
                 blocks.append(
-                    f"来源[{citation['index']}]（文件：{file_name}{page_suffix}）:\n{citation.get('snippet', '')}"
+                    f"来源[{citation['index']}]（文件：{file_name}{page_suffix}{figure_note}）:\n"
+                    f"{citation.get('snippet', '')}"
                 )
             context = "\n\n".join(blocks)
+            figure_instruction = (
+                "部分来源含页面图示，回答时可引用来源编号并提示用户查看对应图示。\n"
+                if has_figures
+                else ""
+            )
             messages.append(
                 {
                     "role": "system",
@@ -613,7 +623,8 @@ class ConversationService:
                         "You are a helpful assistant. Answer using the numbered sources below. "
                         "When stating facts from a source, append the source number in square brackets "
                         "like [1] at the end of the relevant sentence. "
-                        "If the context is insufficient, say so clearly.\n\n"
+                        "If the context is insufficient, say so clearly.\n"
+                        f"{figure_instruction}\n"
                         f"Context:\n{context}"
                     ),
                 }

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import re
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any, Iterator
@@ -10,6 +12,10 @@ from psycopg.types.json import Json
 
 from app.core.config import get_settings
 from app.core.database import normalize_psycopg_url
+
+logger = logging.getLogger(__name__)
+
+_VECTOR_DIM_RE = re.compile(r"vector\((\d+)\)", re.IGNORECASE)
 
 
 class KbDataIndexRepository:
@@ -186,6 +192,57 @@ class KbDataIndexRepository:
                     USING hnsw (embedding vector_cosine_ops)
                     """
                 )
+                self._sync_embedding_column_dimension(cur, dim)
+
+    @staticmethod
+    def _parse_vector_column_dimension(coltype: str | None) -> int | None:
+        if not coltype:
+            return None
+        match = _VECTOR_DIM_RE.search(coltype)
+        return int(match.group(1)) if match else None
+
+    def _sync_embedding_column_dimension(self, cur: psycopg.Cursor, target_dim: int) -> None:
+        cur.execute(
+            """
+            SELECT format_type(a.atttypid, a.atttypmod) AS coltype
+            FROM pg_attribute a
+            JOIN pg_class c ON c.oid = a.attrelid
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'app'
+              AND c.relname = 't_fact_kb_index'
+              AND a.attname = 'embedding'
+              AND NOT a.attisdropped
+            """
+        )
+        row = cur.fetchone()
+        if row is None:
+            return
+        current_dim = self._parse_vector_column_dimension(str(row.get("coltype") or ""))
+        if current_dim is None or current_dim == target_dim:
+            return
+        logger.warning(
+            "t_fact_kb_index.embedding 维度 %s 与 RAG_EMBEDDING_DIMENSIONS=%s 不一致，"
+            "将清空索引向量并调整列类型（需重新导入文件）",
+            current_dim,
+            target_dim,
+        )
+        cur.execute(
+            "DROP INDEX IF EXISTS app.t_fact_kb_index_embedding_hnsw_idx"
+        )
+        cur.execute("TRUNCATE app.t_fact_kb_index")
+        cur.execute(
+            f"""
+            ALTER TABLE app.t_fact_kb_index
+            ALTER COLUMN embedding TYPE vector({int(target_dim)})
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS t_fact_kb_index_embedding_hnsw_idx
+            ON app.t_fact_kb_index
+            USING hnsw (embedding vector_cosine_ops)
+            """
+        )
 
     def ensure_knowledge_base_stub(
         self,
