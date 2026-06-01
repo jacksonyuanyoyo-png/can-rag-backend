@@ -20,6 +20,12 @@ from app.domain.conversation import (
 from app.domain.knowledge_base import SearchHit, utc_now_iso
 from app.repositories.conversation_repository import ConversationNotFoundError, ConversationRepository
 from app.services.knowledge_base_adapter import KnowledgeBaseNotFoundError, require_kb
+from app.services.chat_vision import append_citation_figures_to_messages
+from app.services.citation_sources import (
+    build_message_sources,
+    citations_from_hits,
+)
+from app.services.markdown_render import rewrite_markdown_asset_urls
 from app.services.openai_chat_service import OpenAIChatError, OpenAIChatService
 
 if TYPE_CHECKING:
@@ -315,14 +321,20 @@ class ConversationService:
                 conversation,
                 knowledge_base_ids,
             )
-            citations = await self._retrieve_citations(kb_ids, normalized_content)
-            citation_payload = self._citations_payload(citations)
+            hits = await self._retrieve_citations(kb_ids, normalized_content)
+            citation_payload, sources_payload = self._prepare_retrieval_payload(hits)
             openai_model = self._chat.resolve_model(model_id)
             chat_messages = self._build_chat_messages(
                 conversation,
                 citations=citation_payload,
             )
             chat_messages.append({"role": "user", "content": normalized_content})
+            chat_messages = append_citation_figures_to_messages(
+                chat_messages,
+                citations=citation_payload,
+                upload_root=self._settings.upload_root_resolved,
+                settings=self._settings,
+            )
             try:
                 reply, usage = await self._chat.complete(messages=chat_messages, model=openai_model)
             except OpenAIChatError as exc:
@@ -331,12 +343,15 @@ class ConversationService:
                     details={"reason": exc.code, "message": exc.message},
                 ) from exc
 
+            reply = self._finalize_assistant_markdown(reply)
+
             assistant_message = MessageRecord(
                 id=new_message_id(),
                 role=MessageRole.ASSISTANT,
                 content=reply,
                 status=MessageStatus.COMPLETED,
                 citations=citation_payload,
+                sources=sources_payload if citation_payload else None,
                 usage=usage,
             )
             self._repository.add_messages(conversation_id, [user_message, assistant_message])
@@ -398,19 +413,21 @@ class ConversationService:
             },
         )
 
-        citations: list[SearchHit] = []
+        hits: list[SearchHit] = []
+        sources_payload: dict[str, Any] | None = None
         if kb_ids:
             yield SseEvent(
                 event="retrieval.started",
                 data={"messageId": assistant_message.id, "knowledgeBaseIds": kb_ids},
             )
-            citations = await self._retrieve_citations(kb_ids, normalized_content)
-            citation_payload = self._citations_payload(citations)
+            hits = await self._retrieve_citations(kb_ids, normalized_content)
+            citation_payload, sources_payload = self._prepare_retrieval_payload(hits)
             yield SseEvent(
                 event="retrieval.completed",
                 data={
                     "messageId": assistant_message.id,
                     "citations": citation_payload,
+                    "sources": sources_payload,
                 },
             )
         else:
@@ -420,6 +437,12 @@ class ConversationService:
         chat_messages = self._build_chat_messages(
             conversation,
             citations=citation_payload,
+        )
+        chat_messages = append_citation_figures_to_messages(
+            chat_messages,
+            citations=citation_payload,
+            upload_root=self._settings.upload_root_resolved,
+            settings=self._settings,
         )
 
         cancelled = False
@@ -460,7 +483,12 @@ class ConversationService:
             return
 
         assistant_message.citations = citation_payload
+        assistant_message.sources = sources_payload
         assistant_message.usage = usage
+        if not cancelled and assistant_message.content:
+            assistant_message.content = self._finalize_assistant_markdown(
+                assistant_message.content
+            )
 
         if cancelled:
             assistant_message.status = MessageStatus.CANCELLED
@@ -470,6 +498,9 @@ class ConversationService:
                     "messageId": assistant_message.id,
                     "status": MessageStatus.CANCELLED.value,
                     "content": assistant_message.content,
+                    "contentFormat": "markdown",
+                    "citations": citation_payload,
+                    "sources": sources_payload,
                 },
             )
         else:
@@ -484,6 +515,9 @@ class ConversationService:
                     "messageId": assistant_message.id,
                     "status": MessageStatus.COMPLETED.value,
                     "content": assistant_message.content,
+                    "contentFormat": "markdown",
+                    "citations": citation_payload,
+                    "sources": sources_payload,
                 },
             )
 
@@ -552,27 +586,18 @@ class ConversationService:
         hits.sort(key=lambda item: item.score, reverse=True)
         return hits[: RAG_TOP_K * max(len(knowledge_base_ids), 1)]
 
-    @staticmethod
-    def _citation_from_hit(hit: SearchHit, *, index: int) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "index": index,
-            "kbId": hit.citation.get("kb_id"),
-            "fileId": hit.document_id,
-            "chunkId": hit.chunk_id,
-            "page": hit.citation.get("page"),
-            "score": hit.score,
-            "snippet": hit.text,
-            "fileName": hit.file_name,
-            "type": hit.citation.get("type", "text"),
-        }
-        storage_key = hit.citation.get("storage_key")
-        if storage_key is not None:
-            payload["storageKey"] = storage_key
-        return payload
-
-    @classmethod
-    def _citations_payload(cls, hits: list[SearchHit]) -> list[dict[str, Any]]:
-        return [cls._citation_from_hit(hit, index=index) for index, hit in enumerate(hits, start=1)]
+    def _prepare_retrieval_payload(
+        self,
+        hits: list[SearchHit],
+    ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+        if not hits:
+            return [], None
+        citations = citations_from_hits(hits)
+        sources = build_message_sources(
+            citations,
+            kb_service=self._knowledge_base_service,
+        )
+        return citations, sources
 
     async def _emit_character_deltas(
         self,
@@ -590,41 +615,83 @@ class ConversationService:
             await asyncio.sleep(0)
 
     @staticmethod
+    def _finalize_assistant_markdown(content: str) -> str:
+        """将回答中的 kb_images/ 等相对路径改写为可请求的静态资源 URL。"""
+        return rewrite_markdown_asset_urls(content)
+
+    @staticmethod
+    def _citation_context_body(citation: dict[str, Any]) -> str:
+        return str(citation.get("markdown") or citation.get("snippet") or "")
+
+    @staticmethod
+    def _markdown_response_instructions(citations: list[dict[str, Any]]) -> str:
+        lines = [
+            "Format your entire answer in Markdown (headings, lists, and emphasis when helpful).",
+            "When stating facts from a source, append the source number in square brackets "
+            "like [1] at the end of the relevant sentence.",
+            "If the context is insufficient, say so clearly.",
+            "When illustrating with an image from the sources, embed it using Markdown image "
+            "syntax with the exact assetUrl listed below—do not invent or alter paths.",
+        ]
+        figure_lines: list[str] = []
+        for citation in citations:
+            index = citation.get("index")
+            for asset in citation.get("imageAssets") or []:
+                asset_url = asset.get("assetUrl")
+                if not asset_url:
+                    continue
+                figure_lines.append(
+                    f"- Source [{index}]: ![brief caption]({asset_url})"
+                )
+        if figure_lines:
+            lines.append("Available images (copy assetUrl verbatim):")
+            lines.extend(figure_lines)
+        return "\n".join(lines) + "\n"
+
     def _build_chat_messages(
+        self,
         conversation: ConversationRecord,
         *,
         citations: list[dict[str, Any]],
-    ) -> list[dict[str, str]]:
-        messages: list[dict[str, str]] = []
+    ) -> list[dict[str, Any]]:
+        messages: list[dict[str, Any]] = []
         if citations:
             blocks: list[str] = []
-            has_figures = any(citation.get("storageKey") for citation in citations)
+            has_figures = any(
+                citation.get("storageKey") or citation.get("imageAssets")
+                for citation in citations
+            )
             for citation in citations:
                 page = citation.get("page")
                 page_suffix = f" 第{page}页" if page is not None else ""
                 file_name = citation.get("fileName") or ""
                 figure_note = ""
-                if citation.get("storageKey"):
-                    figure_note = "（含页面图示，回答可写「见图[n]」）"
+                if citation.get("storageKey") or citation.get("imageAssets"):
+                    figure_note = "（含图示，回答中可用 Markdown 嵌入下方 assetUrl）"
                 blocks.append(
                     f"来源[{citation['index']}]（文件：{file_name}{page_suffix}{figure_note}）:\n"
-                    f"{citation.get('snippet', '')}"
+                    f"{self._citation_context_body(citation)}"
                 )
             context = "\n\n".join(blocks)
-            figure_instruction = (
-                "部分来源含页面图示，回答时可引用来源编号并提示用户查看对应图示。\n"
-                if has_figures
-                else ""
-            )
+            vision_note = ""
+            if has_figures and self._settings.CHAT_VISION_ENABLED:
+                vision_note = (
+                    "Some sources include figures; follow-up user content may attach those images. "
+                    "Combine text and figures in your Markdown answer, cite with [n], and embed "
+                    "images using the assetUrl list when showing them to the user.\n"
+                )
+            elif has_figures:
+                vision_note = (
+                    "Some sources include figures; embed them in Markdown using the listed assetUrl "
+                    "when they help answer the question, and cite with [n].\n"
+                )
             messages.append(
                 {
                     "role": "system",
                     "content": (
-                        "You are a helpful assistant. Answer using the numbered sources below. "
-                        "When stating facts from a source, append the source number in square brackets "
-                        "like [1] at the end of the relevant sentence. "
-                        "If the context is insufficient, say so clearly.\n"
-                        f"{figure_instruction}\n"
+                        "You are a helpful assistant. Answer using the numbered sources below.\n"
+                        f"{self._markdown_response_instructions(citations)}"
+                        f"{vision_note}"
                         f"Context:\n{context}"
                     ),
                 }

@@ -54,6 +54,7 @@ class MessageRecord:
     content: str
     status: MessageStatus = MessageStatus.COMPLETED
     citations: list[dict[str, Any]] = field(default_factory=list)
+    sources: dict[str, Any] | None = None
     usage: MessageUsage | None = None
     created_at: str = field(default_factory=utc_now_iso)
     edited_at: str | None = None
@@ -69,6 +70,8 @@ class MessageRecord:
         if self.role == MessageRole.ASSISTANT:
             payload["status"] = self.status.value
             payload["citations"] = self.citations
+            if self.sources is not None:
+                payload["sources"] = self.sources
             if self.usage is not None:
                 payload["usage"] = self.usage.to_api()
         return payload

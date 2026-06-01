@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import get_settings
+from app.domain.conversation import MessageUsage
 from app.domain.knowledge_base import KnowledgeBaseMetadata, SearchHit
 from app.main import app
 from app.repositories.conversation_repository import ConversationRepository
@@ -543,12 +544,132 @@ def test_image_citation_includes_storage_key() -> None:
         citation={"type": "image", "storage_key": "kb_images/abc.png", "page": 2},
     )
     kb_service = StubKnowledgeBaseService(kbs={kb_uuid: metadata}, hits=[hit])
-    payload = ConversationService(
+    service = ConversationService(
         ConversationRepository(),
         settings=get_settings(),
         chat_service=FakeOpenAIChatService(),
         knowledge_base_service=kb_service,
-    )._citations_payload([hit])
-    assert payload[0]["type"] == "image"
-    assert payload[0]["storageKey"] == "kb_images/abc.png"
-    assert payload[0]["page"] == 2
+    )
+    citations, sources = service._prepare_retrieval_payload([hit])
+    assert citations[0]["type"] == "image"
+    assert citations[0]["storageKey"] == "kb_images/abc.png"
+    assert citations[0]["page"] == 2
+    assert citations[0]["imageAssets"][0]["assetUrl"].startswith("/v1/uploads/assets/")
+    assert sources is not None
+    assert len(sources["segments"]) == 1
+    assert len(sources["figures"]) == 1
+
+
+def test_build_chat_messages_includes_markdown_image_url_instructions() -> None:
+    chat = CapturingFakeOpenAIChatService()
+    kb_uuid = "kb_md_images"
+    metadata = KnowledgeBaseMetadata(name="md", id=kb_uuid)
+    hits = [
+        SearchHit(
+            document_id="f1",
+            file_name="guide.docx",
+            chunk_id="c1",
+            text="步骤说明\n\n![图示](kb_images/abc.png)",
+            score=0.9,
+            citation={"kb_id": kb_uuid},
+        ),
+    ]
+    kb_service = StubKnowledgeBaseService(kbs={kb_uuid: metadata}, hits=hits)
+    service = ConversationService(
+        ConversationRepository(),
+        settings=get_settings(),
+        chat_service=chat,
+        knowledge_base_service=kb_service,
+    )
+    conversation = service.create_conversation(title="Markdown images")
+    asyncio.run(
+        _collect_stream_events(
+            service,
+            conversation.id,
+            content="Show the UI steps",
+            knowledge_base_ids=[kb_uuid],
+        )
+    )
+    system_content = next(
+        message["content"] for message in chat.last_messages if message["role"] == "system"
+    )
+    assert "Format your entire answer in Markdown" in system_content
+    assert "assetUrl" in system_content
+    assert "/v1/uploads/assets/kb_images/abc.png" in system_content
+    assert "Source [1]:" in system_content
+
+
+class MarkdownImageReplyFake(FakeOpenAIChatService):
+    async def stream(self, *, messages, model, cancel_event=None):
+        text = "见下图 ![UI](kb_images/abc.png) [1]"
+        yield text, None
+        yield "", MessageUsage(prompt_tokens=1, completion_tokens=2, total_tokens=3)
+
+
+def test_stream_completed_content_rewrites_assistant_markdown_images() -> None:
+    kb_uuid = "kb_rewrite_reply"
+    metadata = KnowledgeBaseMetadata(name="rewrite", id=kb_uuid)
+    hit = SearchHit(
+        document_id="f1",
+        file_name="guide.docx",
+        chunk_id="c1",
+        text="![图示](kb_images/abc.png)",
+        score=0.9,
+        citation={"kb_id": kb_uuid},
+    )
+    kb_service = StubKnowledgeBaseService(kbs={kb_uuid: metadata}, hits=[hit])
+    service = ConversationService(
+        ConversationRepository(),
+        settings=get_settings(),
+        chat_service=MarkdownImageReplyFake(),
+        knowledge_base_service=kb_service,
+    )
+    conversation = service.create_conversation(title="Rewrite reply")
+    events = asyncio.run(
+        _collect_stream_events(
+            service,
+            conversation.id,
+            content="Show image",
+            knowledge_base_ids=[kb_uuid],
+        )
+    )
+    completed = next(data for name, data in events if name == "message.completed")
+    assert "![UI](/v1/uploads/assets/kb_images/abc.png)" in completed["content"]
+    assert "](kb_images/" not in completed["content"]
+    stored = service.list_messages(conversation.id)[-1]
+    assert stored.content == completed["content"]
+
+
+def test_send_message_rewrites_assistant_markdown_images() -> None:
+    kb_uuid = "kb_rewrite_sync"
+    metadata = KnowledgeBaseMetadata(name="rewrite-sync", id=kb_uuid)
+    hit = SearchHit(
+        document_id="f1",
+        file_name="guide.docx",
+        chunk_id="c1",
+        text="body",
+        score=0.9,
+        citation={"kb_id": kb_uuid},
+    )
+
+    class SyncImageReplyFake(FakeOpenAIChatService):
+        async def complete(self, *, messages, model):
+            return "图 ![x](kb_images/sync.jpeg) [1]", MessageUsage()
+
+    kb_service = StubKnowledgeBaseService(kbs={kb_uuid: metadata}, hits=[hit])
+    service = ConversationService(
+        ConversationRepository(),
+        settings=get_settings(),
+        chat_service=SyncImageReplyFake(),
+        knowledge_base_service=kb_service,
+    )
+    conversation = service.create_conversation(title="Sync rewrite")
+    result = asyncio.run(
+        service.send_message(
+            conversation_id=conversation.id,
+            content="Show",
+            knowledge_base_ids=[kb_uuid],
+        )
+    )
+    assert "![x](/v1/uploads/assets/kb_images/sync.jpeg)" in result.assistant_message.content
+    assert "](kb_images/" not in result.assistant_message.content

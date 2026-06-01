@@ -2,14 +2,31 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from typing import Any
 
 from app.domain.conversation import MessageUsage
 
 
-def _last_user_content(messages: list[dict[str, str]]) -> str:
+def _content_to_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "text":
+                parts.append(str(part.get("text", "")))
+            elif part.get("type") == "image_url":
+                parts.append("[image]")
+        return " ".join(parts)
+    return str(content)
+
+
+def _last_user_content(messages: list[dict[str, Any]]) -> str:
     for message in reversed(messages):
         if message.get("role") == "user":
-            return message.get("content", "")
+            return _content_to_text(message.get("content", ""))
     return ""
 
 
@@ -22,7 +39,7 @@ class FakeOpenAIChatService:
     async def complete(
         self,
         *,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         model: str,
     ) -> tuple[str, MessageUsage]:
         user = _last_user_content(messages)
@@ -31,7 +48,7 @@ class FakeOpenAIChatService:
     async def stream(
         self,
         *,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         model: str,
         cancel_event: asyncio.Event | None = None,
     ) -> AsyncIterator[tuple[str, MessageUsage | None]]:

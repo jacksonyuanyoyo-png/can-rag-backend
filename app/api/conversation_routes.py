@@ -84,6 +84,7 @@ def _send_message_response(result) -> dict[str, Any]:
             "status": result.assistant_message.status.value,
             "createdAt": result.assistant_message.created_at,
             "citations": result.assistant_message.citations,
+            "sources": result.assistant_message.sources,
             "usage": usage.to_api() if usage is not None else {
                 "promptTokens": 0,
                 "completionTokens": 0,

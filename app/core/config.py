@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -15,13 +16,16 @@ class Settings(BaseSettings):
     FASTGPT_CHAT_PATH: str = "/api/v1/chat/completions"
 
     OPENAI_API_KEY: str = ""
-    OPENAI_BASE_URL: str = "https://api.openai.com/v1"
-    OPENAI_CHAT_MODEL: str = "gpt-4o-mini"
+    # 兼容 OpenAI SDK / LangChain：需带 /v1 后缀（如 openai-proxy）
+    OPENAI_BASE_URL: str = "https://api.openai-proxy.org/v1"
+    OPENAI_CHAT_MODEL: str = "gpt-4.1-mini"
     OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-large"
     OPENAI_VECTOR_STORE_NAME: str = "default-rag-store"
     VLM_ENABLED: bool = False
-    VLM_MODEL: str = "gpt-4o-mini"
-    PDF_VLM_MODEL: str = "gpt-4o"
+    CHAT_VISION_ENABLED: bool = True
+    CHAT_VISION_MAX_IMAGES: int = 4
+    VLM_MODEL: str = "gpt-4.1-mini"
+    PDF_VLM_MODEL: str = "gpt-4.1-mini"
     VLM_TIMEOUT_SECONDS: float = 120.0
     VLM_MIN_IMAGE_BYTES: int = 5120
     VLM_MAX_IMAGE_BYTES: int = 8_000_000
@@ -49,6 +53,8 @@ class Settings(BaseSettings):
     RAG_CHUNK_SIZE: int = 800
     RAG_CHUNK_OVERLAP: int = 120
     RAG_EMBEDDING_DIMENSIONS: int = 256
+    # auto：有 Key 且维度满足时用 OpenAI；hash：始终本地占位向量（无需有效 Key）
+    RAG_EMBEDDING_BACKEND: str = "auto"
     RAG_BACKEND: str = "local"
 
     MODELS_JSON: str = ""
@@ -65,6 +71,25 @@ class Settings(BaseSettings):
     AUTH_REFRESH_COOKIE_NAME: str = "refresh_token"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    @field_validator("OPENAI_API_KEY", mode="before")
+    @classmethod
+    def _normalize_openai_api_key(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        return value.strip().strip('"').strip("'")
+
+    @field_validator("RAG_EMBEDDING_BACKEND", mode="before")
+    @classmethod
+    def _normalize_embedding_backend(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        normalized = value.strip().lower()
+        if normalized in {"", "auto"}:
+            return "auto"
+        if normalized in {"hash", "openai"}:
+            return normalized
+        return normalized
 
     # pydantic-settings: expose resolved upload directory
     @property

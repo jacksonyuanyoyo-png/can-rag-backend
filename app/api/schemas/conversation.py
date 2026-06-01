@@ -72,6 +72,7 @@ class AssistantMessageResponse(BaseModel):
     status: str
     createdAt: str
     citations: list[dict[str, Any]] = Field(default_factory=list)
+    sources: dict[str, Any] | None = None
     usage: UsageResponse
 
 
