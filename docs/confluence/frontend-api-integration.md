@@ -107,8 +107,10 @@ Refresh Token 通过 **HttpOnly Cookie** 下发（`/v1/auth/refresh`）。
 
 **当前无需 Token**（联调友好，生产需加固）：
 
-- 知识库 CRUD、文件 chunks、hit-test
+- 知识库 CRUD、**文件删除**、文件 chunks、hit-test
 - 会话 / 流式问答 `/v1/conversations/*`
+
+权限码（生产 RBAC 参考）：`kb:file:delete`（单删 / 批量删）
 
 ---
 
@@ -129,7 +131,7 @@ GET embedding-models + GET models（对话）
 1. presign 返回 `storageKey` 后，开发环境需将文件写入 `{LOCAL_UPLOAD_ROOT}/{storageKey}`（例：`app/storage/uploads/kb/{kbId}/{fileId}.pdf`）
 2. import-job 创建后状态 `queued` → `running` → `completed`（约数秒，取决于 Poller/BackgroundTasks）
 3. 问答前确保 import `completed` 且 chunks 非空
-4. **向量模型**：创建 KB 的 `embeddingModelId` 须来自 `GET /v1/embedding-models`（勿用 `/v1/models` 对话模型）
+4. **向量模型**：`embeddingModelId` 取 `GET /v1/models` 中 `tag === "embedding"` 的项，或 `GET /v1/embedding-models`
 
 ---
 
@@ -184,18 +186,56 @@ GET /v1/embedding-models
 | 字段 | 说明 |
 |------|------|
 | `id` | 创建 KB 时传 `embeddingModelId` |
+| `tag` | 固定为 `embedding`（与 `/v1/models` 中 embedding 项一致） |
 | `dimensions` | 模型默认输出维度 |
 | `status` | `active` / `deprecated` |
 
 **后端行为**：导入与检索均使用该 KB 绑定的 embedding 模型；若未配置 `OPENAI_API_KEY` 或 `RAG_EMBEDDING_DIMENSIONS < 512`，自动回退本地 hash 占位向量。
 
-### 4.0.1 对话模型列表（聊天下拉）
+### 4.0.1 模型统一列表（推理 + Embedding）
 
 ```http
-GET /v1/models?status=active
+GET /v1/models
 ```
 
-返回 `gpt-4o-mini`、`gpt-4o` 等 **Chat Completions** 模型，供 `messages:stream` 的 `modelId` 使用。
+**无需鉴权**。返回 **推理（对话）** 与 **embedding（向量）** 模型合并列表，通过 `tag` 区分用途：
+
+| `tag` | 用途 | 典型 `id` |
+|-------|------|-----------|
+| `inference` | 会话 `messages:stream` 的 `modelId` | `gpt-4o-mini`、`gpt-5` |
+| `embedding` | 创建 KB 的 `embeddingModelId` | `text-embedding-3-small` |
+
+**响应 200 示例（节选）**：
+
+```json
+{
+  "data": [
+    {
+      "id": "gpt-4o-mini",
+      "name": "GPT-4o mini",
+      "icon": "/models/openai.svg",
+      "provider": "openai",
+      "status": "active",
+      "visibility": "system",
+      "tag": "inference"
+    },
+    {
+      "id": "text-embedding-3-small",
+      "name": "text-embedding-3-small",
+      "icon": "/models/openai.svg",
+      "provider": "openai",
+      "status": "active",
+      "tag": "embedding",
+      "dimensions": 1536,
+      "maxInputTokens": 8191,
+      "description": "性价比优先，适合大多数 RAG 场景"
+    }
+  ],
+  "requestId": "req_..."
+}
+```
+
+前端可按 `tag === 'inference'` / `tag === 'embedding'` 拆成两个下拉；亦可继续单独调用 `GET /v1/embedding-models`（仅 embedding，字段一致）。
 
 ---
 
@@ -269,6 +309,79 @@ GET /v1/knowledge-bases/{kbId}/files?page=1&pageSize=10
 ```
 
 `status`：`available`（已索引）/ `indexing`（导入中）/ `failed`
+
+### 5.1.3 删除知识库文件（含切片与向量）
+
+删除指定文件及其全部索引数据，适用于 presign 上传、网页导入等走 Postgres `t_dim_kb_file` 的路径，也兼容仅存在于本地元数据 `documents` 的旧数据。
+
+```http
+DELETE /v1/knowledge-bases/{kbId}/files/{fileId}
+```
+
+**响应 200**：
+
+```json
+{
+  "data": { "success": true },
+  "requestId": "req_..."
+}
+```
+
+**批量删除**（部分失败仍返回 200，见 `failed` 列表）：
+
+```http
+POST /v1/knowledge-bases/{kbId}/files:batch-delete
+Content-Type: application/json
+
+{
+  "fileIds": ["file_3d44a0cc844f47d4a4ef3230281eab96", "file_missing"]
+}
+```
+
+**响应 200**：
+
+```json
+{
+  "data": {
+    "succeeded": ["file_3d44a0cc844f47d4a4ef3230281eab96"],
+    "failed": [
+      {
+        "fileId": "file_missing",
+        "code": "FILE_NOT_FOUND",
+        "message": "File not found"
+      }
+    ]
+  },
+  "requestId": "req_..."
+}
+```
+
+**后端清理范围**（按实现顺序）：
+
+| 层级 | 说明 |
+| --- | --- |
+| 切片正文 | `app.t_fact_kb_data` 中该 `fileId` 全部行 |
+| 向量索引 | `app.t_fact_kb_index`（FK 级联，随 data / 文件行删除） |
+| 文件元数据 | `app.t_dim_kb_file`、关联 `t_fact_upload_object` |
+| 落盘文件 | `{LOCAL_UPLOAD_ROOT}/{storageKey}`；PDF 增强生成的同目录 `.md` |
+| 页图资源 | 切片 Markdown / `citation.storage_key` 引用的 `kb_images/*` |
+| 本地 JSON 模式 | `knowledge_bases.json` 中 `documents` 条目 + `rag_chunks` / 本地 vector JSON |
+
+**常见错误**：
+
+| code | HTTP | 场景 |
+| --- | --- | --- |
+| `FILE_NOT_FOUND` | 404 | `fileId` 不存在或不属于该 `kbId` |
+| `FILE_IN_USE` | 409 | 文件正在导入（`status` 为 `parsing` / `chunking` / `indexing`，或元数据 `import_status` 为 `pending` / `running`） |
+| `KB_NOT_FOUND` | 404 | 知识库不存在 |
+
+**curl 示例**：
+
+```shell
+curl -s -X DELETE "$BASE/v1/knowledge-bases/$KB_ID/files/$FILE_ID" | jq .
+```
+
+> 鉴权：与知识库其它文件接口一致，当前联调环境多数未强制 Bearer；生产建议要求 `kb:file:delete`。
 
 ### 5.2 上传 Presign
 
@@ -689,6 +802,21 @@ data: {}
 
 ## 8. Citation 对象与深链
 
+### 8.0 知识片段在库里的存储格式
+
+导入后，**分段正文**写入 Postgres `app.t_fact_kb_data.text`（**纯文本字段，无单独 MIME 列**）：
+
+| 来源 | `text` 内容形态 |
+|------|------------------|
+| PDF（`pdfEnhancement=true`） | **Markdown**：`## Page n`、正文、`![...](kb_images/uuid.png)`、`**图示内容**` 等 |
+| DOCX / MD 上传 | **Markdown**：内嵌 `![图示](kb_images/...)` |
+| 纯 TXT | 多为纯文本；`textFormat` 为 `plain` |
+| VLM 独立图块 | `type=image` 的 citation，正文为图片描述文字 |
+
+向量检索用 `app.t_fact_kb_index`（`text` 为带文件名前缀的索引文本，结构仍多为 Markdown）。
+
+**前端渲染**：列表/引用请优先用响应里的 **`markdown`** 字段（图片路径已改写为 `/v1/uploads/assets/...`），勿只对 `text`/`snippet` 做 `white-space: pre`。
+
 ### 8.1 字段说明（SSE / 同步消息 `citations[]`）
 
 | 字段 | 类型 | 说明 |
@@ -703,8 +831,58 @@ data: {}
 | `fileName` | string | 文件名 |
 | `type` | `"text"` \| `"image"` | 文本块或图片描述 |
 | `storageKey` | string? | 图片资源键：`type=image` 时必有；文本 chunk 内含 Markdown 图片路径（kb_images/ 前缀）时也可能带首图 key，用于缩略图/深链 |
+| `textFormat` | `"markdown"` \| `"plain"` | 是否按 Markdown 渲染 |
+| `markdown` | string | 建议用于 `react-markdown` 的正文（图链已改写为 `/v1/uploads/assets/...`） |
+| `hasImages` | boolean | 是否含 `kb_images/` 图 |
+| `imageKeys` / `imageAssets` | array? | 全部图示 storageKey 与可请求路径 |
+| `chunkViewPath` / `fileViewPath` | string? | 切片详情 / 文件详情 API 相对路径 |
 
-### 8.2 原文对照深链（前端路由建议）
+### 8.2 回答完成后的 `sources`（`message.completed` / `retrieval.completed`）
+
+流式结束时的 `data.sources` 供底部「知识分段 + 来源文件」面板使用：
+
+```json
+{
+  "segments": [
+    {
+      "index": 1,
+      "snippet": "原始召回文本",
+      "markdown": "改写图链后的 Markdown",
+      "textFormat": "markdown",
+      "hasImages": true,
+      "chunkViewPath": "/v1/knowledge-bases/{kbId}/files/{fileId}/chunks/{chunkId}",
+      "fileViewPath": "/v1/knowledge-bases/{kbId}/files/{fileId}",
+      "fileName": "policy.docx",
+      "score": 0.91
+    }
+  ],
+  "files": [
+    {
+      "kbId": "...",
+      "fileId": "...",
+      "fileName": "...",
+      "mimeType": "application/vnd...",
+      "storageKey": "kb/{kbId}/{fileId}.docx",
+      "fileViewPath": "/v1/knowledge-bases/{kbId}/files/{fileId}",
+      "segmentIndexes": [1, 2]
+    }
+  ],
+  "figures": [
+    { "ref": 1, "storageKey": "kb_images/....png", "assetUrl": "/v1/uploads/assets/kb_images/....png" }
+  ],
+  "render": {
+    "assistantContent": "markdown",
+    "segmentContent": "markdown",
+    "imagePathPrefix": "/v1/uploads/assets/"
+  }
+}
+```
+
+- **助手正文** `content`：模型生成的 Markdown/纯文本（引用 `[1]`、`见图[1]`）；配图请结合 `sources.figures` 或解析 `citations[].markdown`。
+- **分段卡片**：用 `segments[].markdown` + `chunkViewPath` 跳转原文对照。
+- **来源文件**：点击 `files[].fileViewPath` 查看文件元数据。
+
+### 8.3 原文对照深链（前端路由建议）
 
 ```text
 /knowledge-bases/{kbId}/files/{fileId}/chunks/{chunkId}
@@ -724,6 +902,14 @@ GET /v1/knowledge-bases/{kbId}/files/{fileId}/chunks?page=1&pageSize=10&q=policy
 ```
 
 Query：`q` 按文本子串过滤；`status` 参数保留但未使用。
+
+**每条切片除 `text` 外还返回**（与库内 Markdown 一致）：
+
+| 字段 | 说明 |
+|------|------|
+| `textFormat` | `markdown` 或 `plain` |
+| `markdown` | 供 Markdown 组件渲染（图链为 `/v1/uploads/assets/...`） |
+| `hasImages` | 是否含嵌入图 |
 
 ### 9.2 单块 + 上下文
 
@@ -770,6 +956,8 @@ GET /v1/knowledge-bases/{kbId}/files/{fileId}
 ```
 
 ### 9.4 原文对照：Markdown 图片如何展示（PDF 增强）
+
+**默认行为**：创建 import-job 时若未传 `parsing.pdfEnhancement`，后端默认为 **`true`**（PDF 按页 VLM 转 Markdown + `kb_images/` 截图）。需配置有效 `OPENAI_API_KEY`；若要关闭可显式传 `"pdfEnhancement": false`。
 
 PDF 开启 `pdfEnhancement` 后，切片与落盘 Markdown 中会出现 **标准 Markdown 图片语法**，路径为后端 `storage_key`，**不是**完整 HTTP URL：
 
@@ -990,6 +1178,7 @@ Content-Type: application/json
 | `VALIDATION_ERROR` | 422 | 请求体校验失败 |
 | `KB_NOT_FOUND` | 404 | 知识库不存在 |
 | `FILE_NOT_FOUND` | 404 | 文件不存在 |
+| `FILE_IN_USE` | 409 | 文件正在导入，不可删除 |
 | `IMPORT_JOB_NOT_FOUND` | 404 | 导入任务不存在 |
 | `IMPORT_PARSE_FAILED` | 400 | 网页抓取/正文抽取失败 |
 | `IMPORT_INVALID_OPTIONS` | 400 | 分段参数非法 |

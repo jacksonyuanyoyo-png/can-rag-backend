@@ -236,6 +236,64 @@ def test_delete_file_happy_path(kb_client: TestClient) -> None:
     assert missing_response.json()["error"]["code"] == "FILE_NOT_FOUND"
 
 
+def test_delete_pg_file_clears_chunks_and_storage(
+    domain_client: TestClient,
+    database_url: str,
+) -> None:
+    from app.repositories.kb_data_index_repository import KbDataIndexRepository
+
+    kb_service: KnowledgeBaseService = domain_client.app.state.knowledge_base_service
+    kb_service._settings.DATABASE_URL = database_url
+    kb_service._kb_data_index_repo = None
+
+    upload_service = domain_client.app.state.upload_service
+    assert upload_service is not None
+    upload_repo = upload_service._upload_repository
+    kb_data_index_repo = kb_service._kb_data_index_repository()
+
+    kb_id = _create_kb(domain_client, name=f"pg-delete-{uuid4().hex[:8]}")
+    file_id = f"file_{uuid4().hex[:24]}"
+    storage_key = f"kb/{kb_id}/{file_id}.txt"
+
+    upload_settings = domain_client.app.state.settings
+    upload_root = Path(upload_settings.LOCAL_UPLOAD_ROOT)
+    storage_path = upload_root / storage_key
+    storage_path.parent.mkdir(parents=True, exist_ok=True)
+    storage_path.write_text("delete me", encoding="utf-8")
+
+    kb_data_index_repo.ensure_knowledge_base_stub(kb_id)
+    upload_repo.create_kb_file(
+        kb_id=kb_id,
+        file_id=file_id,
+        file_name="delete-me.txt",
+        mime_type="text/plain",
+        size_bytes=len(b"delete me"),
+        storage_key=storage_key,
+        status="ready",
+    )
+    kb_data_index_repo.upsert_data(
+        kb_id=kb_id,
+        file_id=file_id,
+        data_id="d000001",
+        text="chunk to remove",
+        page=1,
+        chunk_index=0,
+        citation={"file_name": "delete-me.txt"},
+    )
+
+    delete_response = domain_client.delete(f"/v1/knowledge-bases/{kb_id}/files/{file_id}")
+    assert delete_response.status_code == 200
+    assert delete_response.json()["data"] == {"success": True}
+
+    assert upload_repo.get_kb_file(file_id) is None
+    assert kb_data_index_repo.list_data_by_file(kb_id, file_id) == []
+    assert not storage_path.exists()
+
+    missing_response = domain_client.get(f"/v1/knowledge-bases/{kb_id}/files/{file_id}")
+    assert missing_response.status_code == 404
+    assert missing_response.json()["error"]["code"] == "FILE_NOT_FOUND"
+
+
 def test_batch_delete_reports_missing_files(kb_client: TestClient) -> None:
     kb_id = _create_kb(kb_client, name="batch-delete-kb")
     file_id = _index_file(kb_client, kb_id, file_name="keep.txt", content=b"content")

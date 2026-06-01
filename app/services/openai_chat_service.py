@@ -49,7 +49,7 @@ class OpenAIChatService:
     async def complete(
         self,
         *,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         model: str,
     ) -> tuple[str, MessageUsage]:
         client = self._client_or_raise()
@@ -75,7 +75,7 @@ class OpenAIChatService:
     async def stream(
         self,
         *,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         model: str,
         cancel_event: asyncio.Event | None = None,
     ) -> AsyncIterator[tuple[str, MessageUsage | None]]:

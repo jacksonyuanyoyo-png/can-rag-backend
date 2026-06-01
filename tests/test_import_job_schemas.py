@@ -9,6 +9,7 @@ from app.api.schemas.import_job import (
     CreateImportJobRequest,
     RetryImportJobRequest,
 )
+from app.domain.import_job import ChunkingConfig, ParsingConfig
 
 
 def _create(payload: dict) -> CreateImportJobRequest:
@@ -228,6 +229,18 @@ def test_retry_request_applies_chunking() -> None:
     assert req.options.chunk_overlap == 16
     assert req.options.include_file_name is False
     assert req.options.include_headings is True
+
+
+def test_parsing_options_default_pdf_enhancement_on() -> None:
+    assert ParsingConfig.default().pdf_enhancement is True
+
+    config = ChunkingConfig.from_chunking_options(
+        {"strategy": "default"},
+        fallback_strategy="default",
+        metadata=None,
+        parsing=None,
+    )
+    assert config.parsing.pdf_enhancement is True
 
 
 def test_parsing_options_parses() -> None:

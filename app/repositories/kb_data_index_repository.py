@@ -12,6 +12,7 @@ from psycopg.types.json import Json
 
 from app.core.config import get_settings
 from app.core.database import normalize_psycopg_url
+from app.utils.text_sanitize import sanitize_for_postgres_json, sanitize_pg_text
 
 logger = logging.getLogger(__name__)
 
@@ -343,10 +344,10 @@ class KbDataIndexRepository:
                         kb_id,
                         file_id,
                         data_id,
-                        text,
+                        sanitize_pg_text(text),
                         page,
                         chunk_index,
-                        Json(citation),
+                        Json(sanitize_for_postgres_json(citation)),
                         now,
                     ),
                 )
@@ -384,7 +385,7 @@ class KbDataIndexRepository:
                         file_id,
                         data_id,
                         index_id,
-                        text,
+                        sanitize_pg_text(text),
                         vector,
                         now,
                     ),

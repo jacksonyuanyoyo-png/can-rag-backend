@@ -37,7 +37,7 @@ class ParsingOptions(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     text_extraction: bool = Field(default=True, alias="textExtraction")
-    pdf_enhancement: bool = Field(default=False, alias="pdfEnhancement")
+    pdf_enhancement: bool = Field(default=True, alias="pdfEnhancement")
     web_use_browser_fallback: bool | None = Field(
         default=None,
         alias="webUseBrowserFallback",

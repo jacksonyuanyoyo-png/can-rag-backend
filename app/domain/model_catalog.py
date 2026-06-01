@@ -4,6 +4,9 @@ from dataclasses import dataclass
 from typing import Any
 
 # 历史占位模型：后端未接入，同步时标记为 inactive
+MODEL_TAG_INFERENCE = "inference"
+MODEL_TAG_EMBEDDING = "embedding"
+
 LEGACY_PLACEHOLDER_MODEL_IDS: frozenset[str] = frozenset(
     {
         "claude-sonnet-4",
@@ -33,12 +36,18 @@ class ModelCatalogEntry:
             "provider": self.provider,
             "status": self.status,
             "visibility": self.visibility,
+            "tag": MODEL_TAG_INFERENCE,
         }
 
 
 def openai_chat_model_catalog() -> list[ModelCatalogEntry]:
     """当前网关实际支持的 OpenAI 对话模型（与 OpenAIChatService.resolve_model 一致）。"""
     return [
+        ModelCatalogEntry(
+            id="gpt-4.1-mini",
+            code="gpt-4.1-mini",
+            display_name="GPT-4.1 mini",
+        ),
         ModelCatalogEntry(
             id="gpt-4o-mini",
             code="gpt-4o-mini",
@@ -93,6 +102,7 @@ class EmbeddingModelCatalogEntry:
             "provider": self.provider,
             "icon": self.icon,
             "status": self.status,
+            "tag": MODEL_TAG_EMBEDDING,
             "dimensions": self.dimensions,
             "maxInputTokens": self.max_input_tokens,
             "description": self.description,

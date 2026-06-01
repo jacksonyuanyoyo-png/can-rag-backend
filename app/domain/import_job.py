@@ -138,7 +138,7 @@ def _read_attr(obj: Any, name: str, default: Any = None) -> Any:
 @dataclass(frozen=True, slots=True)
 class ParsingConfig:
     text_extraction: bool = True
-    pdf_enhancement: bool = False
+    pdf_enhancement: bool = True
     web_use_browser_fallback: bool | None = None
 
     @classmethod
@@ -152,7 +152,7 @@ class ParsingConfig:
         web_fallback = data.get("webUseBrowserFallback")
         return cls(
             text_extraction=bool(data.get("textExtraction", True)),
-            pdf_enhancement=bool(data.get("pdfEnhancement", False)),
+            pdf_enhancement=bool(data.get("pdfEnhancement", True)),
             web_use_browser_fallback=(
                 bool(web_fallback) if web_fallback is not None else None
             ),
@@ -333,7 +333,7 @@ def _parsing_config_from_input(parsing: Any) -> ParsingConfig:
     web_fallback = _read_attr(parsing, "web_use_browser_fallback", None)
     return ParsingConfig(
         text_extraction=bool(_read_attr(parsing, "text_extraction", True)),
-        pdf_enhancement=bool(_read_attr(parsing, "pdf_enhancement", False)),
+        pdf_enhancement=bool(_read_attr(parsing, "pdf_enhancement", True)),
         web_use_browser_fallback=(
             bool(web_fallback) if web_fallback is not None else None
         ),

@@ -11,7 +11,11 @@ def test_model_service_falls_back_to_openai_catalog_without_repository() -> None
 
     assert "gpt-4o-mini" in ids
     assert "gpt-5" in ids
+    assert "text-embedding-3-small" in ids
     assert "claude-sonnet-4" not in ids
+    inference = [model for model in models if model.tag == "inference"]
+    embedding = [model for model in models if model.tag == "embedding"]
+    assert inference and embedding
     assert all(model.provider == "openai" for model in models)
     assert models[0].icon.startswith("/models/")
 

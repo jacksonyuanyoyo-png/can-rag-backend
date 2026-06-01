@@ -41,9 +41,20 @@ def resolve_kb_embedding_config(
             raw_model = stored.strip()
     model_id = raw_model or settings.OPENAI_EMBEDDING_MODEL.strip() or "text-embedding-3-small"
     storage_dims = int(settings.RAG_EMBEDDING_DIMENSIONS)
+    backend_mode = settings.RAG_EMBEDDING_BACKEND.strip().lower()
+
+    if backend_mode == "hash":
+        return KbEmbeddingConfig(model_id=model_id, dimensions=storage_dims, backend="hash")
 
     if not settings.OPENAI_API_KEY.strip():
         return KbEmbeddingConfig(model_id=model_id, dimensions=storage_dims, backend="hash")
+
+    if backend_mode == "openai":
+        return KbEmbeddingConfig(
+            model_id=model_id,
+            dimensions=storage_dims,
+            backend="openai",
+        )
 
     if model_id == "text-embedding-ada-002":
         if storage_dims != ADA002_DIMENSIONS:

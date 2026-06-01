@@ -11,6 +11,7 @@ from psycopg.rows import dict_row
 
 from app.core.database import normalize_psycopg_url
 from app.repositories.kb_data_index_repository import KbDataIndexRepository
+from app.utils.text_sanitize import sanitize_for_postgres_json, sanitize_pg_text
 
 
 @dataclass(slots=True)
@@ -295,9 +296,12 @@ class PgVectorStore:
                             record.document_id,
                             record.file_name,
                             record.chunk_id,
-                            record.text,
+                            sanitize_pg_text(record.text),
                             self._vector_literal(record.embedding),
-                            json.dumps(record.citation, ensure_ascii=False),
+                            json.dumps(
+                                sanitize_for_postgres_json(record.citation),
+                                ensure_ascii=False,
+                            ),
                         )
                         for record in records
                     ],

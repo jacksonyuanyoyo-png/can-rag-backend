@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Request, Response, status
 from fastapi.responses import FileResponse
 
 from app.api.common import get_request_id, success_response
@@ -17,6 +18,7 @@ from app.services.auth.auth_service import AuthService
 from app.services.upload_service import UploadService
 
 upload_router = APIRouter(prefix="/v1/uploads", tags=["Uploads"])
+dev_upload_router = APIRouter(prefix="/v1/_dev/uploads", tags=["Dev Uploads"])
 
 
 def get_upload_service(request: Request) -> UploadService:
@@ -39,6 +41,38 @@ def _current_user(
 
 
 CurrentUserDep = Annotated[UserMePublic, Depends(_current_user)]
+
+
+@dev_upload_router.put("/{upload_id}")
+async def dev_put_upload_object(
+    upload_id: str,
+    request: Request,
+) -> Response:
+    """Local dev: accept presigned PUT bytes into LOCAL_UPLOAD_ROOT (see presign uploadUrl)."""
+    storage_key = request.headers.get("X-Storage-Key") or request.headers.get("x-storage-key")
+    if not storage_key or not storage_key.strip():
+        raise BusinessError(
+            ErrorCode.VALIDATION_ERROR,
+            message="X-Storage-Key header is required",
+            details={"uploadId": upload_id},
+        )
+
+    relative = Path(storage_key.strip())
+    if relative.is_absolute() or ".." in relative.parts:
+        raise BusinessError(
+            ErrorCode.VALIDATION_ERROR,
+            message="Invalid storage key",
+            details={"storageKey": storage_key},
+        )
+
+    body = await request.body()
+    destination = get_settings().upload_root_resolved / relative
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(body)
+
+    digest = hashlib.md5(body).hexdigest()  # noqa: S324 — dev ETag only
+    etag = f'"{digest}"'
+    return Response(status_code=status.HTTP_200_OK, headers={"ETag": etag})
 
 
 @upload_router.post("/presign", status_code=status.HTTP_201_CREATED)

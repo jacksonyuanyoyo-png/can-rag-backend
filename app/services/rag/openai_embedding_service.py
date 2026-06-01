@@ -6,7 +6,47 @@ from app.core.config import Settings
 
 
 class OpenAIEmbeddingError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        code: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.code = code
+
+
+def _raise_for_response(response: httpx.Response) -> None:
+    status = response.status_code
+    body_preview = response.text[:300]
+    if status == 401:
+        raise OpenAIEmbeddingError(
+            "OpenAI API Key 无效或已过期（401）。请在运行后端的 .env 中设置有效的 "
+            "OPENAI_API_KEY（https://platform.openai.com/account/api-keys），"
+            "并确认 OPENAI_BASE_URL 与 Key 所属平台一致；本地开发可设 "
+            "RAG_EMBEDDING_BACKEND=hash 跳过 OpenAI 向量化。",
+            status_code=status,
+            code="openai_auth_failed",
+        )
+    if status == 403:
+        raise OpenAIEmbeddingError(
+            "OpenAI Embeddings 访问被拒绝（403），请检查账号权限与模型可用性。",
+            status_code=status,
+            code="openai_forbidden",
+        )
+    if status == 429:
+        raise OpenAIEmbeddingError(
+            "OpenAI Embeddings 请求过于频繁（429），请稍后重试。",
+            status_code=status,
+            code="openai_rate_limited",
+        )
+    raise OpenAIEmbeddingError(
+        f"OpenAI embeddings 失败: status={status} body={body_preview}",
+        status_code=status,
+        code="openai_api_error",
+    )
 
 
 class OpenAIEmbeddingService:
@@ -57,9 +97,7 @@ class OpenAIEmbeddingService:
             timeout=self._timeout,
         )
         if response.status_code >= 400:
-            raise OpenAIEmbeddingError(
-                f"OpenAI embeddings 失败: status={response.status_code} body={response.text[:300]}"
-            )
+            _raise_for_response(response)
 
         body = response.json()
         rows = body.get("data")

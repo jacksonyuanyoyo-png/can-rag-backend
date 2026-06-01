@@ -17,6 +17,11 @@ from app.repositories.knowledge_base_repository import KnowledgeBaseRepository
 from app.services.import_job_worker import FileProcessor, ImportJobWorker
 from app.services.rag.kb_embedding import resolve_kb_embedding_config
 from app.services.rag.parsing import get_parser_for
+from app.services.rag.parsing.docx_parser import DocxDocumentParser
+from app.services.rag.parsing.md_parser import (
+    MarkdownDocumentParser,
+    extract_image_storage_keys,
+)
 from app.services.rag.parsing.image_store import ImageStore
 from app.services.rag.parsing.pdf_to_markdown import parse_pdf_with_options
 from app.services.rag.pipeline import RagPipeline
@@ -98,6 +103,8 @@ def build_process_file(
     settings: Settings,
 ) -> FileProcessor:
     vlm_service = VlmService(settings)
+    image_store = ImageStore(settings.upload_root_resolved)
+    upload_root = settings.upload_root_resolved
 
     def process_file(
         *,
@@ -134,10 +141,35 @@ def build_process_file(
                 pdf_enhancement=config.parsing.pdf_enhancement,
                 settings=settings,
                 vlm_service=vlm_service,
-                image_store=ImageStore(settings.upload_root_resolved),
+                image_store=image_store,
                 on_page_progress=on_pdf_page,
             )
             if config.parsing.pdf_enhancement:
+                config = ChunkingConfig.from_dict(
+                    {**config.to_dict(), "metaHeadings": True}
+                )
+        elif file_name.lower().endswith((".md", ".markdown")):
+            progress.report_stage(
+                ImportJobStage.PARSE,
+                file_index=file_index,
+                fraction=0.25,
+            )
+            document = MarkdownDocumentParser(
+                image_store=image_store,
+                upload_root=upload_root,
+            ).parse(path)
+            if document.blocks and any(block.heading for block in document.blocks):
+                config = ChunkingConfig.from_dict(
+                    {**config.to_dict(), "metaHeadings": True}
+                )
+        elif file_name.lower().endswith(".docx"):
+            progress.report_stage(
+                ImportJobStage.PARSE,
+                file_index=file_index,
+                fraction=0.25,
+            )
+            document = DocxDocumentParser(image_store=image_store).parse(path)
+            if document.blocks and any(block.heading for block in document.blocks):
                 config = ChunkingConfig.from_dict(
                     {**config.to_dict(), "metaHeadings": True}
                 )
@@ -164,6 +196,11 @@ def build_process_file(
         def on_pipeline_progress(stage: ImportJobStage, fraction: float) -> None:
             progress.report_stage(stage, file_index=file_index, fraction=fraction)
 
+        has_figures = bool(document.images) or bool(
+            extract_image_storage_keys(document.full_text)
+        )
+        force_image_description = config.parsing.pdf_enhancement or has_figures
+
         result = pipeline.index_data(
             knowledge_base=job.kb_id,
             file_id=file_id,
@@ -171,7 +208,7 @@ def build_process_file(
             config=config,
             file_name=file_name,
             embedding_config=embedding_config,
-            force_image_description=config.parsing.pdf_enhancement,
+            force_image_description=force_image_description,
             on_progress=on_pipeline_progress,
         )
         return int(result["data"])

@@ -185,6 +185,13 @@ def test_list_models_happy_path(auth_models_client: TestClient) -> None:
     assert gpt5["icon"] == "/models/openai.svg"
     assert gpt5["status"] == "active"
     assert gpt5["visibility"] == "system"
+    assert gpt5["tag"] == "inference"
+
+    assert "text-embedding-3-small" in ids
+    embed = next(model for model in models if model["id"] == "text-embedding-3-small")
+    assert embed["tag"] == "embedding"
+    assert embed["dimensions"] == 1536
+    assert "maxInputTokens" in embed
 
 
 def test_list_models_does_not_require_auth(auth_models_client: TestClient) -> None:
@@ -207,6 +214,7 @@ def test_list_embedding_models_happy_path(auth_models_client: TestClient) -> Non
     assert "gpt-4o" not in ids
 
     small = next(model for model in models if model["id"] == "text-embedding-3-small")
+    assert small["tag"] == "embedding"
     assert small["dimensions"] == 1536
     assert small["maxInputTokens"] == 8191
     assert small["provider"] == "openai"

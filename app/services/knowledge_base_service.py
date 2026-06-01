@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,12 +21,16 @@ from app.domain.upload import KnowledgeBaseFileRecord
 from app.repositories.kb_data_index_repository import KbDataIndexRepository
 from app.repositories.knowledge_base_repository import KnowledgeBaseRepository
 from app.repositories.upload_repository import UploadRepository
+from app.services.markdown_render import markdown_payload_for_storage_text
 from app.services.rag.kb_embedding import KbEmbeddingConfig, resolve_kb_embedding_config
+from app.services.rag.parsing.md_parser import extract_image_storage_keys
 from app.services.rag.pipeline import RagPipeline
 
 HIT_TEST_MIN_TOP_K = 1
 HIT_TEST_MAX_TOP_K = 50
 ResourceType = Literal["personal", "team"]
+_PG_FILE_BUSY_STATUSES = frozenset({"parsing", "chunking", "indexing"})
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -159,7 +164,7 @@ class FileChunkItem:
     indexes: list[FileChunkIndexItem]
 
     def to_api_dict(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "dataId": self.data_id,
             "text": self.text,
             "charCount": self.char_count,
@@ -168,6 +173,8 @@ class FileChunkItem:
             "citation": self.citation,
             "indexes": [item.to_api_dict() for item in self.indexes],
         }
+        payload.update(markdown_payload_for_storage_text(self.text))
+        return payload
 
 
 @dataclass(slots=True)
@@ -666,8 +673,33 @@ class KnowledgeBaseService:
         metadata: KnowledgeBaseMetadata,
         file_id: str,
     ) -> dict[str, bool]:
-        self._ensure_file_deletable(metadata=metadata, file_id=file_id)
-        self.delete_document(knowledge_base=metadata.name, document_id=file_id)
+        pg_record: KnowledgeBaseFileRecord | None = None
+        if self._upload_repository is not None:
+            candidate = self._upload_repository.get_kb_file(file_id)
+            if candidate is not None and candidate.kb_id == metadata.id:
+                pg_record = candidate
+
+        document = metadata.documents.get(file_id)
+        if pg_record is None and document is None:
+            raise BusinessError(
+                ErrorCode.FILE_NOT_FOUND,
+                details={"fileId": file_id},
+            )
+
+        if document is not None:
+            self._ensure_file_deletable(metadata=metadata, file_id=file_id)
+        if pg_record is not None:
+            self._ensure_pg_file_deletable(record=pg_record, document=document)
+
+        if pg_record is not None:
+            self._delete_pg_uploaded_file(metadata=metadata, record=pg_record)
+
+        if document is not None and file_id in metadata.documents:
+            self.delete_document(knowledge_base=metadata.name, document_id=file_id)
+        elif pg_record is not None and file_id in metadata.documents:
+            metadata.documents.pop(file_id, None)
+            self._repository.save(metadata)
+
         return {"success": True}
 
     def batch_delete_files(
@@ -760,6 +792,84 @@ class KnowledgeBaseService:
                 details={"fileId": file_id},
             )
         return document
+
+    def _ensure_pg_file_deletable(
+        self,
+        *,
+        record: KnowledgeBaseFileRecord,
+        document: DocumentMetadata | None,
+    ) -> None:
+        if record.status in _PG_FILE_BUSY_STATUSES:
+            raise BusinessError(
+                ErrorCode.FILE_IN_USE,
+                details={"fileId": record.id, "status": record.status},
+            )
+        if document is not None and self._is_file_in_use(document=document):
+            raise BusinessError(
+                ErrorCode.FILE_IN_USE,
+                details={"fileId": record.id},
+            )
+
+    def _delete_pg_uploaded_file(
+        self,
+        *,
+        metadata: KnowledgeBaseMetadata,
+        record: KnowledgeBaseFileRecord,
+    ) -> None:
+        image_keys = self._collect_file_image_storage_keys(metadata.id, record.id)
+        self._unlink_storage_key(record.storage_key)
+        for key in image_keys:
+            self._unlink_storage_key(key)
+
+        self._rag_pipeline.clear_file_index(metadata.id, record.id)
+        self._rag_pipeline.clear_file_index(metadata.name, record.id)
+
+        try:
+            self._kb_data_index_repository().delete_by_file(metadata.id, record.id)
+        except Exception:
+            logger.warning(
+                "delete_by_file failed for kb=%s file=%s",
+                metadata.id,
+                record.id,
+                exc_info=True,
+            )
+
+        assert self._upload_repository is not None
+        self._upload_repository.delete_kb_file(kb_id=metadata.id, file_id=record.id)
+        self._upload_repository.delete_upload_sessions_for_storage_key(record.storage_key)
+
+    def _collect_file_image_storage_keys(self, kb_id: str, file_id: str) -> list[str]:
+        try:
+            rows = self._kb_data_index_repository().list_data_by_file(kb_id, file_id)
+        except Exception:
+            return []
+        keys: list[str] = []
+        for row in rows:
+            keys.extend(extract_image_storage_keys(str(row.get("text", ""))))
+            citation = row.get("citation") or {}
+            storage_key = citation.get("storage_key") or citation.get("storageKey")
+            if storage_key:
+                keys.append(str(storage_key))
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for key in keys:
+            if key in seen:
+                continue
+            seen.add(key)
+            ordered.append(key)
+        return ordered
+
+    def _unlink_storage_key(self, storage_key: str) -> None:
+        relative = Path(storage_key)
+        if relative.is_absolute() or ".." in relative.parts:
+            return
+        path = self._settings.upload_root_resolved / relative
+        if path.is_file():
+            path.unlink()
+        if path.suffix.lower() == ".pdf":
+            markdown_path = path.with_suffix(".md")
+            if markdown_path.is_file():
+                markdown_path.unlink()
 
     @staticmethod
     def _is_file_in_use(*, document: DocumentMetadata) -> bool:

@@ -6,13 +6,16 @@ from typing import Any
 from app.core.config import Settings
 from app.domain.model import Model
 from app.domain.model_catalog import (
+    MODEL_TAG_EMBEDDING,
+    MODEL_TAG_INFERENCE,
     EmbeddingModelCatalogEntry,
     ModelCatalogEntry,
     openai_chat_model_catalog,
     openai_embedding_model_catalog,
 )
 from app.repositories.model_repository import ModelRepository
-from app.schemas.model import EmbeddingModelItem, ModelItem
+from app.schemas.model import EmbeddingModelItem, ModelItem, inference_model_item
+
 
 _FIELD_DEFAULTS = {"status": "active", "visibility": "system", "provider": "openai"}
 
@@ -51,6 +54,7 @@ class ModelService:
                     icon="/models/openai.svg",
                     provider="openai",
                     status="active",
+                    tag=MODEL_TAG_EMBEDDING,
                     dimensions=self._settings.RAG_EMBEDDING_DIMENSIONS,
                     maxInputTokens=8191,
                     description="来自 OPENAI_EMBEDDING_MODEL 环境变量",
@@ -58,21 +62,27 @@ class ModelService:
             )
         return items
 
-    def sync_catalog_to_database(self) -> None:
-        if self._repository is None:
-            return
-        self._repository.sync_openai_catalog(self.catalog_entries())
-
     def list_models(self) -> list[ModelItem]:
+        """推理（对话）模型 + embedding 模型，统一列表，用 tag 区分。"""
+        chat_models = self._list_inference_models()
+        embedding_models = [item.to_model_item() for item in self.list_embedding_models()]
+        return chat_models + embedding_models
+
+    def _list_inference_models(self) -> list[ModelItem]:
         if self._repository is not None:
             db_models = self._repository.list_active()
             if db_models:
                 return [self._to_model_item(model) for model in db_models]
         return self._load_models_from_config()
 
+    def sync_catalog_to_database(self) -> None:
+        if self._repository is None:
+            return
+        self._repository.sync_openai_catalog(self.catalog_entries())
+
     @staticmethod
     def _to_model_item(model: Model) -> ModelItem:
-        return ModelItem(
+        return inference_model_item(
             id=model.id,
             name=model.display_name,
             icon=model.icon or "/models/openai.svg",
@@ -112,4 +122,6 @@ class ModelService:
         merged = {**_FIELD_DEFAULTS, **entry}
         if "name" not in merged and "display_name" in merged:
             merged["name"] = merged["display_name"]
+        if "tag" not in merged:
+            merged["tag"] = MODEL_TAG_INFERENCE
         return ModelItem.model_validate(merged)

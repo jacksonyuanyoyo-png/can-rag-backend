@@ -10,6 +10,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
 from app.core.database import normalize_psycopg_url
+from app.utils.text_sanitize import sanitize_pg_text
 from app.domain.import_job import (
     CANCELLABLE_STATUSES,
     ImportJob,
@@ -331,7 +332,7 @@ class ImportJobRepository:
                 params.append(error_code)
             if error_message is not None:
                 assignments.append("error_message = %s")
-                params.append(error_message)
+                params.append(sanitize_pg_text(error_message))
 
         params.append(job_id)
         sql = f"""

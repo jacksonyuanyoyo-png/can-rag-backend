@@ -8,6 +8,7 @@ from langchain_text_splitters import CharacterTextSplitter, RecursiveCharacterTe
 from app.core.config import Settings, get_settings
 from app.domain.import_job import ChunkingConfig
 from app.services.rag.parsing.base import ParsedBlock, ParsedDocument
+from app.services.rag.parsing.md_parser import glue_images_to_paragraphs
 
 _PARAGRAPH_SEPARATORS: tuple[str, ...] = ("\n\n", "\n", "。", "．", ". ", " ", "")
 
@@ -146,7 +147,7 @@ class ChunkingService:
             return self._split_markdown_sections(document, config)
         page = self._first_block_page(document.blocks)
         texts = self._recursive_split(
-            document.full_text,
+            glue_images_to_paragraphs(document.full_text),
             chunk_size=config.max_chunk_size or self._settings.RAG_CHUNK_SIZE,
             chunk_overlap=config.overlap
             if config.overlap is not None
@@ -172,7 +173,7 @@ class ChunkingService:
         )
         pieces: list[tuple[str, int | None]] = []
         for block in document.blocks:
-            text = block.text.strip()
+            text = glue_images_to_paragraphs(block.text.strip())
             if not text:
                 continue
             section = f"## {block.heading}\n\n{text}" if block.heading else text

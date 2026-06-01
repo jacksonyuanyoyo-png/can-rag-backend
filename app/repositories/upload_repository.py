@@ -423,6 +423,28 @@ class UploadRepository:
             raise RuntimeError("创建知识库文件记录失败。")
         return KnowledgeBaseFileRecord.from_row(dict(row))
 
+    def delete_kb_file(self, *, kb_id: str, file_id: str) -> bool:
+        """删除知识库文件元数据；关联切片/向量由 FK ON DELETE CASCADE 清理。"""
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    DELETE FROM app.t_fact_upload_object
+                    WHERE kb_id = %s AND file_id = %s
+                    """,
+                    (kb_id, file_id),
+                )
+                cur.execute(
+                    """
+                    DELETE FROM app.t_dim_kb_file
+                    WHERE kb_id = %s AND id = %s
+                    """,
+                    (kb_id, file_id),
+                )
+                deleted = cur.rowcount > 0
+            self._commit(conn)
+        return deleted
+
     def update_kb_file(
         self,
         *,
