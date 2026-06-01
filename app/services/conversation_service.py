@@ -4,7 +4,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from app.core.config import Settings, get_settings
 from app.core.errors import BusinessError, ErrorCode
@@ -18,7 +18,7 @@ from app.domain.conversation import (
     new_message_id,
 )
 from app.domain.knowledge_base import SearchHit, utc_now_iso
-from app.repositories.conversation_repository import ConversationNotFoundError, ConversationRepository
+from app.repositories.conversation_repository import ConversationNotFoundError
 from app.services.knowledge_base_adapter import KnowledgeBaseNotFoundError, require_kb
 from app.services.chat_vision import append_citation_figures_to_messages
 from app.services.citation_sources import (
@@ -30,6 +30,48 @@ from app.services.openai_chat_service import OpenAIChatError, OpenAIChatService
 
 if TYPE_CHECKING:
     from app.services.knowledge_base_service import KnowledgeBaseService
+
+
+class ConversationRepositoryProtocol(Protocol):
+    def create(self, *, title: str, folder: str | None = None, pinned: bool = False) -> ConversationRecord: ...
+
+    def get(self, conversation_id: str) -> ConversationRecord | None: ...
+
+    def require(self, conversation_id: str) -> ConversationRecord: ...
+
+    def list_all(self) -> list[ConversationRecord]: ...
+
+    def add_messages(
+        self, conversation_id: str, messages: list[MessageRecord]
+    ) -> ConversationRecord: ...
+
+    def update(
+        self,
+        conversation_id: str,
+        *,
+        title: str | None = None,
+        folder: str | None = None,
+        pinned: bool | None = None,
+        clear_folder: bool = False,
+    ) -> ConversationRecord: ...
+
+    def soft_delete(self, conversation_id: str) -> None: ...
+
+    def bind_knowledge_bases(self, conversation_id: str, kb_ids: list[str]) -> ConversationRecord: ...
+
+    def find_message_by_id(self, message_id: str) -> MessageRecord | None: ...
+
+    def update_message(
+        self,
+        message_id: str,
+        *,
+        content: str | None = None,
+        status: MessageStatus | None = None,
+        citations: list[dict[str, Any]] | None = None,
+        sources: dict[str, Any] | None = None,
+        usage: MessageUsage | None = None,
+    ) -> MessageRecord: ...
+
 
 logger = logging.getLogger(__name__)
 
@@ -147,11 +189,11 @@ class MessageFeedbackResult:
 
 
 class ConversationService:
-    """会话用例服务：基于内存仓储提供 REST 与非流式/流式消息能力。"""
+    """会话用例服务：REST 与非流式/流式消息；仓储可为内存或 PostgreSQL。"""
 
     def __init__(
         self,
-        repository: ConversationRepository,
+        repository: ConversationRepositoryProtocol,
         *,
         settings: Settings | None = None,
         chat_service: OpenAIChatService | None = None,
@@ -266,7 +308,17 @@ class ConversationService:
             created_at=created_at,
             comment=comment,
         )
-        self._message_feedback[(message_id, user_id)] = result
+        upsert_feedback = getattr(self._repository, "upsert_feedback", None)
+        if upsert_feedback is not None:
+            upsert_feedback(
+                message_id=message_id,
+                user_id=user_id,
+                rating=normalized_rating,
+                comment=comment,
+                created_at=created_at,
+            )
+        else:
+            self._message_feedback[(message_id, user_id)] = result
         return result
 
     def _ensure_conversation_mutable(self, conversation_id: str) -> ConversationRecord:
@@ -321,9 +373,11 @@ class ConversationService:
                 conversation,
                 knowledge_base_ids,
             )
-            hits = await self._retrieve_citations(kb_ids, normalized_content)
+            retrieval_query = self._build_retrieval_query(conversation, normalized_content)
+            hits = await self._retrieve_citations(kb_ids, retrieval_query)
             citation_payload, sources_payload = self._prepare_retrieval_payload(hits)
             openai_model = self._chat.resolve_model(model_id)
+            conversation = self._load_conversation_for_generation(conversation_id)
             chat_messages = self._build_chat_messages(
                 conversation,
                 citations=citation_payload,
@@ -415,12 +469,17 @@ class ConversationService:
 
         hits: list[SearchHit] = []
         sources_payload: dict[str, Any] | None = None
+        conversation_for_llm = self._load_conversation_for_generation(conversation_id)
+        retrieval_query = self._build_retrieval_query(
+            conversation_for_llm,
+            normalized_content,
+        )
         if kb_ids:
             yield SseEvent(
                 event="retrieval.started",
                 data={"messageId": assistant_message.id, "knowledgeBaseIds": kb_ids},
             )
-            hits = await self._retrieve_citations(kb_ids, normalized_content)
+            hits = await self._retrieve_citations(kb_ids, retrieval_query)
             citation_payload, sources_payload = self._prepare_retrieval_payload(hits)
             yield SseEvent(
                 event="retrieval.completed",
@@ -435,7 +494,7 @@ class ConversationService:
 
         openai_model = self._chat.resolve_model(model_id)
         chat_messages = self._build_chat_messages(
-            conversation,
+            conversation_for_llm,
             citations=citation_payload,
         )
         chat_messages = append_citation_figures_to_messages(
@@ -469,6 +528,7 @@ class ConversationService:
                     yield delta_event
         except OpenAIChatError as exc:
             assistant_message.status = MessageStatus.FAILED
+            self._persist_message_update(assistant_message)
             yield SseEvent(
                 event="message.failed",
                 data={
@@ -492,6 +552,7 @@ class ConversationService:
 
         if cancelled:
             assistant_message.status = MessageStatus.CANCELLED
+            self._persist_message_update(assistant_message)
             yield SseEvent(
                 event="message.completed",
                 data={
@@ -505,6 +566,7 @@ class ConversationService:
             )
         else:
             assistant_message.status = MessageStatus.COMPLETED
+            self._persist_message_update(assistant_message)
             yield SseEvent(
                 event="usage.completed",
                 data={"messageId": assistant_message.id, "usage": usage.to_api()},
@@ -521,7 +583,6 @@ class ConversationService:
                 },
             )
 
-        conversation.touch()
         yield SseEvent(event="done", data={})
 
         async with self._lock:
@@ -548,7 +609,55 @@ class ConversationService:
                 return {"messageId": message_id, "status": MessageStatus.CANCELLED.value}
 
             message.status = MessageStatus.CANCELLED
+            self._persist_message_update(message)
             return {"messageId": message_id, "status": MessageStatus.CANCELLED.value}
+
+    def _load_conversation_for_generation(self, conversation_id: str) -> ConversationRecord:
+        return self._repository.require(conversation_id)
+
+    def _persist_message_update(self, message: MessageRecord) -> None:
+        try:
+            self._repository.update_message(
+                message.id,
+                content=message.content,
+                status=message.status,
+                citations=message.citations,
+                sources=message.sources,
+                usage=message.usage,
+            )
+        except LookupError:
+            logger.warning("Failed to persist message update: message_id=%s", message.id)
+
+    def _build_retrieval_query(
+        self,
+        conversation: ConversationRecord,
+        current_content: str,
+    ) -> str:
+        user_texts: list[str] = []
+        for message in conversation.messages:
+            if message.role != MessageRole.USER:
+                continue
+            text = message.content.strip()
+            if text:
+                user_texts.append(text)
+
+        current = current_content.strip()
+        if not user_texts or user_texts[-1] != current:
+            user_texts.append(current)
+
+        max_turns = self._settings.CHAT_HISTORY_MAX_TURNS
+        if max_turns > 0:
+            user_texts = user_texts[-max_turns:]
+        return "\n".join(user_texts)
+
+    def _select_history_messages(self, conversation: ConversationRecord) -> list[MessageRecord]:
+        max_turns = self._settings.CHAT_HISTORY_MAX_TURNS
+        if max_turns <= 0:
+            return list(conversation.messages)
+        max_messages = max_turns * 2
+        if len(conversation.messages) <= max_messages:
+            return list(conversation.messages)
+        return list(conversation.messages[-max_messages:])
 
     def _resolve_kb_ids(
         self,
@@ -696,7 +805,7 @@ class ConversationService:
                     ),
                 }
             )
-        for message in conversation.messages:
+        for message in self._select_history_messages(conversation):
             if message.role == MessageRole.ASSISTANT and message.status == MessageStatus.STREAMING:
                 continue
             if message.role not in {MessageRole.USER, MessageRole.ASSISTANT}:

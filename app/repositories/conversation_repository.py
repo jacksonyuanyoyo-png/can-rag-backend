@@ -3,7 +3,13 @@ from __future__ import annotations
 import uuid
 from threading import Lock
 
-from app.domain.conversation import ConversationRecord, ConversationStatus, MessageRecord
+from app.domain.conversation import (
+    ConversationRecord,
+    ConversationStatus,
+    MessageRecord,
+    MessageStatus,
+    MessageUsage,
+)
 from app.domain.knowledge_base import utc_now_iso
 
 
@@ -132,3 +138,34 @@ class ConversationRepository:
                     if message.id == message_id:
                         return message
             return None
+
+    def update_message(
+        self,
+        message_id: str,
+        *,
+        content: str | None = None,
+        status: MessageStatus | None = None,
+        citations: list[dict] | None = None,
+        sources: dict | None = None,
+        usage: MessageUsage | None = None,
+    ) -> MessageRecord:
+        with self._lock:
+            for conversation in self._conversations.values():
+                if conversation.status == ConversationStatus.DELETED:
+                    continue
+                for message in conversation.messages:
+                    if message.id != message_id:
+                        continue
+                    if content is not None:
+                        message.content = content
+                    if status is not None:
+                        message.status = status
+                    if citations is not None:
+                        message.citations = citations
+                    if sources is not None:
+                        message.sources = sources
+                    if usage is not None:
+                        message.usage = usage
+                    conversation.touch()
+                    return message
+        raise LookupError(f"Message not found: {message_id}")

@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from app.core.config import Settings
 from app.core.database import initialize_database, is_database_configured
 from app.repositories.conversation_repository import ConversationRepository
+from app.repositories.postgres_conversation_repository import PostgresConversationRepository
 from app.repositories.folder_repository import FolderRepository
 from app.repositories.idempotency_repository import IdempotencyRepository
 from app.repositories.import_job_repository import ImportJobRepository
@@ -46,6 +47,14 @@ _DB_DEPENDENT_STATE_KEYS = (
 _PG_RAG_BACKENDS = frozenset({"postgres_pgvector", "langchain_pgvector"})
 
 
+def _build_conversation_repository(settings: Settings):
+    if is_database_configured(settings):
+        repository = PostgresConversationRepository(settings.DATABASE_URL)
+        repository.ensure_schema()
+        return repository
+    return ConversationRepository()
+
+
 def _settings_for_runtime(settings: Settings) -> Settings:
     """无 DATABASE_URL 时降级 PG 依赖项，避免 lifespan 启动崩溃。"""
     if is_database_configured(settings):
@@ -74,7 +83,7 @@ def wire_app_state(app: FastAPI, settings: Settings) -> dict[str, Any]:
     )
     app.state.knowledge_base_service = knowledge_base_service
     app.state.conversation_service = ConversationService(
-        ConversationRepository(),
+        _build_conversation_repository(runtime_settings),
         settings=runtime_settings,
         knowledge_base_service=knowledge_base_service,
     )

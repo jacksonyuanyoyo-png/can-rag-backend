@@ -18,6 +18,7 @@ from app.api.schemas.conversation import (
     UpdateConversationRequest,
 )
 from app.core.errors import BusinessError, ErrorCode
+from app.domain.conversation import MessageRole
 from app.repositories.conversation_repository import ConversationNotFoundError
 from app.services.conversation_service import (
     ConversationService,
@@ -59,6 +60,8 @@ def _require_conversation(service: ConversationService, conversation_id: str):
 
 
 def _message_list_item(message) -> dict[str, Any]:
+    if message.role == MessageRole.ASSISTANT:
+        return message.to_api()
     return {
         "id": message.id,
         "role": message.role.value,

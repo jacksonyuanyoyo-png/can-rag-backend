@@ -691,6 +691,8 @@ Accept: text/event-stream
 }
 ```
 
+多轮对话：续聊时必须复用同一 `conversationId`；服务端会从已持久化的历史消息组装 LLM 上下文（配置 `DATABASE_URL` 时写入 PostgreSQL）。
+
 ---
 
 ## 6. 分段配置 import-jobs 示例

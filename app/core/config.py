@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     VLM_ENABLED: bool = False
     CHAT_VISION_ENABLED: bool = True
     CHAT_VISION_MAX_IMAGES: int = 4
+    CHAT_HISTORY_MAX_TURNS: int = 20
     VLM_MODEL: str = "gpt-4.1-mini"
     PDF_VLM_MODEL: str = "gpt-4.1-mini"
     VLM_TIMEOUT_SECONDS: float = 120.0
