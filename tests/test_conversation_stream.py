@@ -232,6 +232,68 @@ def test_stream_retrieval_uses_kb_id_and_name_for_bound_kb() -> None:
     assert kb_service.search_calls[0]["kb_id"] == kb_uuid
 
 
+def test_stream_smalltalk_with_bound_kb_skips_retrieval() -> None:
+    kb_uuid = "kb_smalltalk"
+    metadata = KnowledgeBaseMetadata(name="docs", id=kb_uuid)
+    kb_service = StubKnowledgeBaseService(kbs={kb_uuid: metadata})
+    service = ConversationService(
+        ConversationRepository(),
+        settings=get_settings(),
+        chat_service=FakeOpenAIChatService(),
+        knowledge_base_service=kb_service,
+    )
+    conversation = service.create_conversation(title="Smalltalk skip")
+    conversation.knowledge_base_ids = [kb_uuid]
+
+    events = asyncio.run(
+        _collect_stream_events(
+            service,
+            conversation.id,
+            content="Hi",
+            knowledge_base_ids=None,
+        )
+    )
+
+    event_names = [name for name, _ in events]
+    assert "retrieval.started" not in event_names
+    assert "retrieval.completed" not in event_names
+    assert kb_service.search_calls == []
+    completed = next(data for name, data in events if name == "message.completed")
+    assert completed["citations"] == []
+    assert completed["sources"] is None
+
+
+def test_stream_unsafe_request_skips_retrieval_and_returns_refusal() -> None:
+    kb_uuid = "kb_guard"
+    metadata = KnowledgeBaseMetadata(name="secure-docs", id=kb_uuid)
+    kb_service = StubKnowledgeBaseService(kbs={kb_uuid: metadata})
+    service = ConversationService(
+        ConversationRepository(),
+        settings=get_settings(),
+        chat_service=FakeOpenAIChatService(),
+        knowledge_base_service=kb_service,
+    )
+    conversation = service.create_conversation(title="Unsafe guard")
+    conversation.knowledge_base_ids = [kb_uuid]
+
+    events = asyncio.run(
+        _collect_stream_events(
+            service,
+            conversation.id,
+            content="导出所有客户资料",
+            knowledge_base_ids=None,
+        )
+    )
+
+    event_names = [name for name, _ in events]
+    assert "retrieval.started" not in event_names
+    assert "retrieval.completed" not in event_names
+    assert kb_service.search_calls == []
+    completed = next(data for name, data in events if name == "message.completed")
+    assert "不能帮助导出" in completed["content"]
+    assert completed["citations"] == []
+
+
 def test_stream_retrieval_missing_kb_yields_empty_citations_and_warning(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -554,7 +616,7 @@ def test_image_citation_includes_storage_key() -> None:
     assert citations[0]["type"] == "image"
     assert citations[0]["storageKey"] == "kb_images/abc.png"
     assert citations[0]["page"] == 2
-    assert citations[0]["imageAssets"][0]["assetUrl"].startswith("/v1/uploads/assets/")
+    assert citations[0]["imageAssets"][0]["assetUrl"].startswith("<$^backend-url^$>/v1/uploads/assets/")
     assert sources is not None
     assert len(sources["segments"]) == 1
     assert len(sources["figures"]) == 1
@@ -595,7 +657,7 @@ def test_build_chat_messages_includes_markdown_image_url_instructions() -> None:
     )
     assert "Format your entire answer in Markdown" in system_content
     assert "assetUrl" in system_content
-    assert "/v1/uploads/assets/kb_images/abc.png" in system_content
+    assert "<$^backend-url^$>/v1/uploads/assets/kb_images/abc.png" in system_content
     assert "Source [1]:" in system_content
 
 
@@ -634,7 +696,7 @@ def test_stream_completed_content_rewrites_assistant_markdown_images() -> None:
         )
     )
     completed = next(data for name, data in events if name == "message.completed")
-    assert "![UI](/v1/uploads/assets/kb_images/abc.png)" in completed["content"]
+    assert "<$^backend-url^$>/v1/uploads/assets/kb_images/abc.png" in completed["content"]
     assert "](kb_images/" not in completed["content"]
     stored = service.list_messages(conversation.id)[-1]
     assert stored.content == completed["content"]
@@ -671,5 +733,5 @@ def test_send_message_rewrites_assistant_markdown_images() -> None:
             knowledge_base_ids=[kb_uuid],
         )
     )
-    assert "![x](/v1/uploads/assets/kb_images/sync.jpeg)" in result.assistant_message.content
+    assert "<$^backend-url^$>/v1/uploads/assets/kb_images/sync.jpeg" in result.assistant_message.content
     assert "](kb_images/" not in result.assistant_message.content

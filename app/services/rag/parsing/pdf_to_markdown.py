@@ -172,11 +172,13 @@ def parse_pdf_with_options(
     on_page_progress: Callable[[int, int], None] | None = None,
 ) -> ParsedDocument:
     file_path = Path(path)
-    legacy_parser = PdfDocumentParser(image_store=image_store)
-
     legacy_doc: ParsedDocument | None = None
     if text_extraction:
-        legacy_doc = legacy_parser.parse(file_path)
+        # 增强模式下不抽取 PDF 内嵌 jp2 等图，避免后续 Vision 报 invalid_image_format
+        legacy_doc = PdfDocumentParser(
+            image_store=image_store,
+            extract_images=not pdf_enhancement,
+        ).parse(file_path)
 
     use_enhancement = pdf_enhancement
     if not use_enhancement and legacy_doc is not None:

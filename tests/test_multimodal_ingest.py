@@ -10,7 +10,12 @@ from app.services.rag.pipeline import _HashRagPipeline
 from app.services.rag.vector_store import JsonVectorStore
 from app.services.rag.vlm_service import VlmService
 
-_FAKE_PNG_BYTES = b"\x89PNG\r\n\x1a\n" + (b"\x00" * 5200)
+MINIMAL_PNG = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
+    b"\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+    b"\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01"
+    b"\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+)
 
 
 def test_multimodal_index_and_search_with_injected_vlm(tmp_path: Path) -> None:
@@ -24,7 +29,7 @@ def test_multimodal_index_and_search_with_injected_vlm(tmp_path: Path) -> None:
         VLM_MIN_IMAGE_BYTES=1,
         RAG_EMBEDDING_DIMENSIONS=256,
     )
-    storage_key = ImageStore(upload_root).save(_FAKE_PNG_BYTES, suffix="png")
+    storage_key = ImageStore(upload_root).save(MINIMAL_PNG, suffix="png")
     document = ParsedDocument(
         full_text="正文关于检索的说明。",
         blocks=[ParsedBlock(page=1, text="正文关于检索的说明。")],
@@ -32,7 +37,7 @@ def test_multimodal_index_and_search_with_injected_vlm(tmp_path: Path) -> None:
     )
     fake_vlm = VlmService(
         settings,
-        chat_completion=lambda messages: "流程图：步骤A→步骤B",
+        chat_completion=lambda messages: "流程图说明：步骤 A 完成后进入步骤 B，形成顺序执行链路。",
     )
     pipeline = _HashRagPipeline(
         settings,
@@ -120,7 +125,7 @@ def test_multimodal_skips_images_when_vlm_disabled(tmp_path: Path) -> None:
         VLM_ENABLED=False,
         RAG_EMBEDDING_DIMENSIONS=256,
     )
-    storage_key = ImageStore(upload_root).save(_FAKE_PNG_BYTES, suffix="png")
+    storage_key = ImageStore(upload_root).save(MINIMAL_PNG, suffix="png")
     document = ParsedDocument(
         full_text="仅文本。",
         blocks=[ParsedBlock(page=1, text="仅文本。")],

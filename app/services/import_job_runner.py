@@ -199,7 +199,13 @@ def build_process_file(
         has_figures = bool(document.images) or bool(
             extract_image_storage_keys(document.full_text)
         )
-        force_image_description = config.parsing.pdf_enhancement or has_figures
+        is_pdf = file_name.lower().endswith(".pdf")
+        is_docx = file_name.lower().endswith(".docx")
+        # DOCX/PDF 增强：正文已含页图 Markdown，不再对每张图单独 VLM（避免 jp2 与重复段）
+        pdf_enhanced = is_pdf and config.parsing.pdf_enhancement
+        force_image_description = (not is_docx and not pdf_enhanced) and (
+            config.parsing.image_vlm_index and has_figures
+        )
 
         result = pipeline.index_data(
             knowledge_base=job.kb_id,

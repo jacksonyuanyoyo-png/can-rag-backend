@@ -19,13 +19,59 @@ from app.services.rag.parsing.image_store import ImageStore
 from app.services.rag.parsing.md_parser import glue_images_to_paragraphs
 
 _EMBED_ID_RE = re.compile(r'rId\d+')
+_IMAGE_REF_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+_DATA_INDEX_SECTION_KEYWORD = "数据索引"
+_NUMBERED_HEADING_RE = re.compile(r"^\s*\d+[\.\)、．]\s*\S")
+_TITLE_STYLE_PREFIXES = ("title", "标题", "subtitle", "副标题")
+_MAX_HEADING_CHARS = 120
+
+
+def _paragraph_plain_text(paragraph: Paragraph) -> str:
+    return "".join(run.text for run in paragraph.runs if run.text).strip()
+
+
+def _is_bold_short_heading(paragraph: Paragraph, text: str) -> bool:
+    if not text or len(text) > 80:
+        return False
+    runs = [run for run in paragraph.runs if (run.text or "").strip()]
+    if not runs:
+        return False
+    bold_runs = [run for run in runs if run.bold is True]
+    if not bold_runs:
+        return False
+    bold_chars = sum(len(run.text) for run in bold_runs)
+    return bold_chars >= max(len(text) * 0.6, 1)
 
 
 def _is_heading_paragraph(paragraph: Paragraph) -> bool:
     style = paragraph.style
-    if style is None or style.name is None:
+    style_name = (style.name if style is not None else None) or ""
+    if style_name.startswith("Heading"):
+        return True
+    lowered_style = style_name.casefold()
+    if any(lowered_style.startswith(prefix) for prefix in _TITLE_STYLE_PREFIXES):
+        return True
+    text = _paragraph_plain_text(paragraph)
+    if not text or len(text) > _MAX_HEADING_CHARS:
         return False
-    return style.name.startswith("Heading")
+    if _NUMBERED_HEADING_RE.match(text):
+        return True
+    if _is_bold_short_heading(paragraph, text):
+        return True
+    return False
+
+
+def _heading_label(paragraph: Paragraph) -> str:
+    text = _paragraph_plain_text(paragraph)
+    if not text:
+        return ""
+    style = paragraph.style
+    style_name = (style.name if style is not None else None) or ""
+    if style_name.startswith("Heading") or _NUMBERED_HEADING_RE.match(text):
+        return text
+    if _is_bold_short_heading(paragraph, text):
+        return text
+    return text
 
 
 def _suffix_from_content_type(content_type: str | None) -> str:
@@ -52,6 +98,35 @@ def _embed_ids_from_element(element: object) -> list[str]:
 
 def _image_markdown(*, alt: str, storage_key: str) -> str:
     return f"![{alt}]({storage_key})"
+
+
+def _is_data_index_section_heading(heading: str) -> bool:
+    return _DATA_INDEX_SECTION_KEYWORD in heading
+
+
+def _normalize_paragraph_layout(text: str) -> str:
+    """将 Word 中「图+制表符+说明」整理为 Markdown 友好的多行结构。"""
+    if not text:
+        return text
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n").replace("\t", "\n")
+    normalized = re.sub(r"(!\[[^\]]*\]\([^)]+\))", r"\1\n\n", normalized)
+    normalized = re.sub(r"\n{3,}", "\n\n", normalized)
+    normalized = glue_images_to_paragraphs(normalized.strip())
+    return _dedupe_image_refs_in_text(normalized)
+
+
+def _dedupe_image_refs_in_text(text: str) -> str:
+    seen_keys: set[str] = set()
+
+    def replace(match: re.Match[str]) -> str:
+        key = match.group(2).strip()
+        if key in seen_keys:
+            return ""
+        seen_keys.add(key)
+        return match.group(0)
+
+    deduped = _IMAGE_REF_RE.sub(replace, text)
+    return re.sub(r"\n{3,}", "\n\n", deduped).strip()
 
 
 class DocxDocumentParser(DocumentParser):
@@ -165,7 +240,7 @@ class DocxDocumentParser(DocumentParser):
                 images=images,
                 alt="图示",
             ).strip()
-        return body
+        return _normalize_paragraph_layout(body)
 
     def _table_text(
         self,
@@ -241,12 +316,14 @@ class DocxDocumentParser(DocumentParser):
 
         current_heading: str | None = None
         current_body: list[str] = []
+        skipping_data_index = False
 
         def flush() -> None:
             nonlocal current_heading, current_body
-            if current_heading is None and not current_body:
+            text = _normalize_paragraph_layout("\n\n".join(current_body).strip())
+            if not text:
+                current_body = []
                 return
-            text = glue_images_to_paragraphs("\n\n".join(current_body).strip())
             blocks.append(
                 ParsedBlock(page=None, text=text, heading=current_heading)
             )
@@ -266,11 +343,23 @@ class DocxDocumentParser(DocumentParser):
                     cache=cache,
                     images=images,
                 )
-                if not content:
+                if not content or (
+                    len(content) <= 2 and not any(character.isalnum() for character in content)
+                ):
                     continue
                 if _is_heading_paragraph(block):
+                    label = _heading_label(block) or content
+                    if _is_data_index_section_heading(label):
+                        flush()
+                        skipping_data_index = True
+                        current_heading = None
+                        current_body = []
+                        continue
+                    skipping_data_index = False
                     flush()
-                    current_heading = content
+                    current_heading = label
+                    continue
+                if skipping_data_index:
                     continue
                 current_body.append(content)
             elif isinstance(block, Table):

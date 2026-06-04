@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any
 
 from app.domain.knowledge_base import SearchHit
 from app.services.markdown_render import (
+    BACKEND_URL_PLACEHOLDER,
     markdown_payload_for_storage_text,
     upload_asset_path,
 )
@@ -166,6 +167,7 @@ def build_message_sources(
             "assistantContent": "markdown",
             "segmentContent": "markdown",
             "imagePathPrefix": "/v1/uploads/assets/",
+            "backendUrlPlaceholder": BACKEND_URL_PLACEHOLDER,
         },
     }
 

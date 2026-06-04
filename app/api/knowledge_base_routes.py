@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Query, Request, status
+from fastapi.responses import FileResponse
 
 from app.api.common import get_request_id, paginated_response, success_response
 from app.api.schemas.knowledge_base import (
@@ -14,6 +15,7 @@ from app.api.schemas.knowledge_base import (
 )
 from app.core.errors import BusinessError, ErrorCode
 from app.domain.model_catalog import default_embedding_model_id, is_valid_embedding_model_id
+from app.services.kb_source_file import content_disposition_header
 from app.services.knowledge_base_adapter import (
     KnowledgeBaseDuplicateError,
     KnowledgeBaseNotFoundError,
@@ -237,6 +239,38 @@ async def get_knowledge_base_file_chunk_with_context(
     return success_response(
         data=result.to_api_dict(),
         request_id=get_request_id(request),
+    )
+
+
+@knowledge_base_router.get("/{kb_id}/files/{file_id}/raw")
+async def get_knowledge_base_file_raw(
+    request: Request,
+    kb_id: str,
+    file_id: str,
+    disposition: str = Query(
+        default="inline",
+        pattern="^(inline|attachment)$",
+        description="inline=浏览器预览，attachment=下载原文",
+    ),
+) -> FileResponse:
+    service = _kb_service(request)
+    try:
+        metadata = require_kb(service, kb_id)
+    except KnowledgeBaseNotFoundError as exc:
+        _raise_kb_not_found(exc)
+
+    resolved = service.resolve_source_file(metadata=metadata, file_id=file_id)
+    kind = "attachment" if disposition == "attachment" else "inline"
+
+    return FileResponse(
+        resolved.path,
+        media_type=resolved.mime_type,
+        headers={
+            "Content-Disposition": content_disposition_header(
+                disposition=kind,
+                file_name=resolved.file_name,
+            ),
+        },
     )
 
 

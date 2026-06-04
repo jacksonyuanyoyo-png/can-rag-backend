@@ -8,12 +8,20 @@ from app.services.rag.parsing.md_parser import extract_image_storage_keys
 
 _IMAGE_REF_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 
+# 前端将此前缀替换为实际 API Base（如 https://api.example.com）
+BACKEND_URL_PLACEHOLDER = "<$^backend-url^$>"
 
-def upload_asset_path(storage_key: str) -> str:
-    """相对 API 路径，前端拼接 Base URL 即可请求图片。"""
+
+def asset_api_path(storage_key: str) -> str:
+    """不含占位符的相对 assets API 路径。"""
     key = storage_key.strip().lstrip("/")
     encoded = "/".join(quote(part, safe="") for part in key.split("/"))
     return f"/v1/uploads/assets/{encoded}"
+
+
+def upload_asset_path(storage_key: str) -> str:
+    """带 BACKEND_URL_PLACEHOLDER 的 Markdown 图片 URL，供前端替换后请求。"""
+    return f"{BACKEND_URL_PLACEHOLDER}{asset_api_path(storage_key)}"
 
 
 def is_markdown_content(text: str) -> bool:
@@ -46,6 +54,13 @@ def rewrite_markdown_asset_urls(text: str) -> str:
         if src.startswith(("http://", "https://", "data:")):
             return match.group(0)
         if src in ("placeholder", "{placeholder}"):
+            return match.group(0)
+        if src.startswith(BACKEND_URL_PLACEHOLDER):
+            return match.group(0)
+        if src.startswith("/v1/uploads/assets/"):
+            key = src.removeprefix("/v1/uploads/assets/").lstrip("/")
+            if key.startswith("kb_images/") or key.startswith("kb/"):
+                return f"![{alt}]({upload_asset_path(key)})"
             return match.group(0)
         key = src.lstrip("/")
         if key.startswith("kb_images/") or key.startswith("kb/"):

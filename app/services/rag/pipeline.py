@@ -12,6 +12,7 @@ from app.domain.knowledge_base import DocumentMetadata, SearchHit
 from app.services.rag.chunker import TextChunker
 from app.services.rag.chunking_service import ChunkingService
 from app.services.rag.parsing.md_parser import extract_image_storage_keys
+from app.services.rag.vlm_text_quality import is_acceptable_vlm_description
 from app.services.rag.embedder import HashEmbeddingService
 from app.services.rag.kb_embedding import EmbedderFactory, KbEmbeddingConfig, resolve_kb_embedding_config
 from app.services.rag.parsing.base import ParsedDocument
@@ -223,7 +224,7 @@ class _HashRagPipeline:
                     hint="文档页面图示：键位布局、功能说明、流程图或表格要点",
                     force=force_image_description,
                 )
-                if desc is None:
+                if not is_acceptable_vlm_description(desc):
                     continue
                 data_id = f"img{(image.page or 0):04d}-{image.index_in_page:03d}"
                 chunk_index = len(data_chunks) + i

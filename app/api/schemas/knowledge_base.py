@@ -50,6 +50,8 @@ class KnowledgeBaseFileDetailResponse(BaseModel):
     mime_type: str | None = Field(default=None, alias="mimeType")
     size_bytes: int | None = Field(default=None, alias="sizeBytes")
     error_message: str | None = Field(default=None, alias="errorMessage")
+    storage_key: str | None = Field(default=None, alias="storageKey")
+    source_file_url: str = Field(alias="sourceFileUrl")
 
     model_config = {"populate_by_name": True}
 

@@ -10,6 +10,7 @@ from psycopg.rows import dict_row
 
 from app.core.database import normalize_psycopg_url
 from app.domain.upload import KnowledgeBaseFileRecord, UploadObject, UploadObjectStatus
+from app.repositories.knowledge_base_stub import insert_knowledge_base_stub
 
 
 class UploadRepository:
@@ -137,29 +138,9 @@ class UploadRepository:
         name: str | None = None,
     ) -> None:
         """确保 PG 中存在知识库主数据，满足 t_dim_kb_file 外键约束。"""
-        display_name = (name or kb_id).strip() or kb_id
-        now = datetime.now(UTC)
         with self._connect() as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO app.t_dim_knowledge_base (
-                        id, name, scope, visibility, status,
-                        created_at, updated_at
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (id) DO NOTHING
-                    """,
-                    (
-                        kb_id,
-                        display_name,
-                        "personal",
-                        "private",
-                        "active",
-                        now,
-                        now,
-                    ),
-                )
+                insert_knowledge_base_stub(cur, kb_id, name=name)
             self._commit(conn)
 
     def delete_upload_sessions_for_storage_key(self, storage_key: str) -> None:

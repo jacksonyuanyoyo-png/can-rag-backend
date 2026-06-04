@@ -139,6 +139,8 @@ def _read_attr(obj: Any, name: str, default: Any = None) -> Any:
 class ParsingConfig:
     text_extraction: bool = True
     pdf_enhancement: bool = True
+    """为每张图单独调用 VLM 生成 img* 向量段（默认关闭；DOCX 仅保留内联 ![图示]）。"""
+    image_vlm_index: bool = False
     web_use_browser_fallback: bool | None = None
 
     @classmethod
@@ -153,6 +155,7 @@ class ParsingConfig:
         return cls(
             text_extraction=bool(data.get("textExtraction", True)),
             pdf_enhancement=bool(data.get("pdfEnhancement", True)),
+            image_vlm_index=bool(data.get("imageVlmIndex", False)),
             web_use_browser_fallback=(
                 bool(web_fallback) if web_fallback is not None else None
             ),
@@ -162,6 +165,7 @@ class ParsingConfig:
         payload: dict[str, Any] = {
             "textExtraction": self.text_extraction,
             "pdfEnhancement": self.pdf_enhancement,
+            "imageVlmIndex": self.image_vlm_index,
         }
         if self.web_use_browser_fallback is not None:
             payload["webUseBrowserFallback"] = self.web_use_browser_fallback
@@ -334,6 +338,7 @@ def _parsing_config_from_input(parsing: Any) -> ParsingConfig:
     return ParsingConfig(
         text_extraction=bool(_read_attr(parsing, "text_extraction", True)),
         pdf_enhancement=bool(_read_attr(parsing, "pdf_enhancement", True)),
+        image_vlm_index=bool(_read_attr(parsing, "image_vlm_index", False)),
         web_use_browser_fallback=(
             bool(web_fallback) if web_fallback is not None else None
         ),

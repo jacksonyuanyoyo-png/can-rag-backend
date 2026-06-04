@@ -9,6 +9,7 @@ from typing import Any
 from openai import APIError, APIStatusError, AuthenticationError, OpenAI, RateLimitError
 
 from app.core.config import Settings
+from app.services.rag.image_normalize import normalize_image_bytes_for_vision
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +89,15 @@ class VlmService:
                 self._settings.VLM_MAX_IMAGE_BYTES,
             )
             return None
-        messages = _build_messages(image_bytes, mime_type=mime_type, hint=hint)
+        try:
+            safe_bytes, safe_mime = normalize_image_bytes_for_vision(
+                image_bytes,
+                suffix_hint=mime_type.removeprefix("image/"),
+            )
+        except (ValueError, RuntimeError) as exc:
+            logger.warning("vlm skip: image normalize failed: %s", exc)
+            return None
+        messages = _build_messages(safe_bytes, mime_type=safe_mime, hint=hint)
         return self._invoke(messages, model=model)
 
     def describe_image_file(
@@ -129,9 +138,17 @@ class VlmService:
                 self._settings.VLM_MAX_IMAGE_BYTES,
             )
             return ""
+        try:
+            safe_bytes, safe_mime = normalize_image_bytes_for_vision(
+                image_bytes,
+                suffix_hint=mime_type.removeprefix("image/"),
+            )
+        except (ValueError, RuntimeError) as exc:
+            logger.warning("vlm page markdown skip: normalize failed: %s", exc)
+            return ""
         messages = _build_page_markdown_messages(
-            image_bytes,
-            mime_type=mime_type,
+            safe_bytes,
+            mime_type=safe_mime,
             page_number=page_number,
         )
         resolved = model or (self._settings.PDF_VLM_MODEL if force else None)

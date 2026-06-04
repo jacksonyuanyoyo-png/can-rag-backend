@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.config import Settings
+from app.services.rag.image_normalize import normalize_image_bytes_for_vision
 from app.services.rag.pipeline import _guess_mime
 
 logger = logging.getLogger(__name__)
@@ -43,7 +44,15 @@ def load_citation_figure_data_urls(
         except OSError:
             logger.debug("citation image read failed: %s", storage_key)
             continue
-        mime = _guess_mime(storage_key)
+        suffix = storage_key.rsplit(".", 1)[-1] if "." in storage_key else "png"
+        try:
+            image_bytes, mime = normalize_image_bytes_for_vision(
+                image_bytes,
+                suffix_hint=suffix,
+            )
+        except (ValueError, RuntimeError):
+            logger.debug("citation image normalize failed: %s", storage_key)
+            continue
         data_url = image_bytes_to_data_url(image_bytes, mime_type=mime)
         seen_keys.add(storage_key)
         figures.append((int(citation["index"]), storage_key, data_url))

@@ -810,8 +810,8 @@ data: {}
 
 | 来源 | `text` 内容形态 |
 |------|------------------|
-| PDF（`pdfEnhancement=true`） | **Markdown**：`## Page n`、正文、`![...](kb_images/uuid.png)`、`**图示内容**` 等 |
-| DOCX / MD 上传 | **Markdown**：内嵌 `![图示](kb_images/...)` |
+| PDF（`pdfEnhancement=true`） | **Markdown**：`## Page n`、正文、图示 `kb_images/{uuid}.png`、`**图示内容**` 段落等 |
+| DOCX / MD 上传 | **Markdown**：内嵌图示路径 `kb_images/...` |
 | 纯 TXT | 多为纯文本；`textFormat` 为 `plain` |
 | VLM 独立图块 | `type=image` 的 citation，正文为图片描述文字 |
 
@@ -957,6 +957,54 @@ GET /v1/knowledge-bases/{kbId}/files/{fileId}/chunks/d000000?context=2
 GET /v1/knowledge-bases/{kbId}/files/{fileId}
 ```
 
+**响应新增字段**（用于左栏「真源文件」预览，非 PDF 增强稿）：
+
+| 字段 | 说明 |
+|------|------|
+| `sourceFileUrl` | 源文件流地址，相对路径：`/v1/knowledge-bases/{kbId}/files/{fileId}/raw` |
+| `storageKey` | 落盘键（上传/网页导入场景），形如 `kb/{kbId}/{fileId}.pdf` |
+
+### 9.3.1 源文件预览 / 下载原文（真文件）
+
+```http
+GET /v1/knowledge-bases/{kbId}/files/{fileId}/raw?disposition=inline
+```
+
+| Query | 默认 | 说明 |
+|-------|------|------|
+| `disposition` | `inline` | `inline`：浏览器内预览；`attachment`：触发下载（「下载原文」按钮） |
+
+- 返回 **上传时的原文件字节流**（`t_dim_kb_file.storage_key` 指向的路径）。
+- **不会**返回 PDF 增强生成的同目录 `{fileId}.md`。
+- `Content-Type` 来自库内 `mimeType` 或按扩展名推断（如 `application/pdf`、`application/vnd.openxmlformats-officedocument.wordprocessingml.document`、`text/markdown`）。
+- 文件不存在于磁盘：`404` + `RESOURCE_NOT_FOUND`；`fileId` 无效：`404` + `FILE_NOT_FOUND`。
+
+**前端拼接完整 URL**：
+
+```typescript
+export function kbSourceFileUrl(
+  apiBase: string,
+  kbId: string,
+  fileId: string,
+  options?: { download?: boolean }
+): string {
+  const base = apiBase.replace(/\/$/, "");
+  const q = options?.download ? "?disposition=attachment" : "";
+  return `${base}/v1/knowledge-bases/${kbId}/files/${fileId}/raw${q}`;
+}
+```
+
+**按格式渲染（左栏原文对照）**：
+
+| `format` / `mimeType` | 建议 |
+|-----------------------|------|
+| `pdf` | `<iframe src={url}>` 或 `react-pdf` / PDF.js，`disposition=inline` |
+| `docx` | `fetch(url)` → `ArrayBuffer` → `docx-preview` 等 |
+| `md` / `markdown` | `fetch(url)` → `text()` → Markdown 组件（勿用 chunks 里的增强文本） |
+| `txt` | `fetch` + `<pre>` 或 iframe |
+
+也可先 `GET .../files/{fileId}` 读 `sourceFileUrl` 与 `mimeType`，再请求该 URL。
+
 ### 9.4 原文对照：Markdown 图片如何展示（PDF 增强）
 
 **默认行为**：创建 import-job 时若未传 `parsing.pdfEnhancement`，后端默认为 **`true`**（PDF 按页 VLM 转 Markdown + `kb_images/` 截图）。需配置有效 `OPENAI_API_KEY`；若要关闭可显式传 `"pdfEnhancement": false`。
@@ -1078,7 +1126,7 @@ md.renderer.rules.image = (tokens, idx, options, env, self) => {
 
 | UI 区域 | 建议数据源 | 渲染方式 |
 |---------|------------|----------|
-| **原文对照**（左） | 优先：同目录增强稿 `GET` 文件详情拿到路径后读 `{fileId}.md`（与 PDF 同目录）；或按页合并 chunks 的 `text` | `KbMarkdownPreview`，勿 `white-space: pre` 裸显 |
+| **原文对照**（左） | **推荐**：`GET .../files/{fileId}/raw` 预览真源文件（§9.3.1）；切片配图仍可用 chunks / `KbMarkdownPreview` | PDF/Word/Markdown 用对应查看器；勿把增强 `.md` 当 PDF 原文件 |
 | **切片信息**（中） | `GET .../files/{fileId}/chunks` → `data[].text` | 每条切片卡片内同样 `KbMarkdownPreview` |
 | **切片知识点**（右） | `GET .../chunks/{dataId}?context=1` → `data.target.text` | 同上 |
 

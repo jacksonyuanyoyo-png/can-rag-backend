@@ -65,7 +65,7 @@ def test_docx_multimodal_index_with_vlm(tmp_path: Path) -> None:
         JsonVectorStore(tmp_path / "vectors"),
         vlm_service=VlmService(
             settings,
-            chat_completion=lambda messages: "键位图：含 Enter 与方向键",
+            chat_completion=lambda messages: "键位图说明：包含 Enter 键与方向键布局，供用户快速定位输入区域。",
         ),
     )
     counts = pipeline.index_data(
@@ -89,3 +89,67 @@ def test_docx_multimodal_index_with_vlm(tmp_path: Path) -> None:
         top_k=5,
     )
     assert any(h.citation.get("type") == "image" for h in hits)
+
+
+def test_docx_index_skips_vlm_image_chunks_by_default(tmp_path: Path) -> None:
+    path = tmp_path / "guide.docx"
+    _make_docx_with_inline_picture(path)
+    upload_root = tmp_path / "uploads"
+    store = ImageStore(upload_root)
+
+    document = DocxDocumentParser(image_store=store).parse(path)
+    settings = Settings(
+        LOCAL_UPLOAD_ROOT=str(upload_root),
+        RAG_BACKEND="local",
+        LOCAL_VECTOR_STORE_PATH=str(tmp_path / "vectors"),
+        RAG_EMBEDDING_DIMENSIONS=256,
+    )
+    pipeline = _HashRagPipeline(
+        settings,
+        JsonVectorStore(tmp_path / "vectors"),
+        vlm_service=VlmService(
+            settings,
+            chat_completion=lambda messages: "不应被索引的 VLM 描述",
+        ),
+    )
+    counts = pipeline.index_data(
+        knowledge_base="kb_docx",
+        file_id="file-docx",
+        document=document,
+        config=ChunkingConfig(strategy="default", max_chunk_size=400),
+        file_name="guide.docx",
+        force_image_description=False,
+    )
+    assert counts["images"] == 0
+    assert counts["data"] == 1
+
+
+def test_docx_rejects_refusal_vlm_text(tmp_path: Path) -> None:
+    path = tmp_path / "guide.docx"
+    _make_docx_with_inline_picture(path)
+    upload_root = tmp_path / "uploads"
+    store = ImageStore(upload_root)
+    document = DocxDocumentParser(image_store=store).parse(path)
+    settings = Settings(
+        LOCAL_UPLOAD_ROOT=str(upload_root),
+        RAG_BACKEND="local",
+        LOCAL_VECTOR_STORE_PATH=str(tmp_path / "vectors"),
+        RAG_EMBEDDING_DIMENSIONS=256,
+    )
+    pipeline = _HashRagPipeline(
+        settings,
+        JsonVectorStore(tmp_path / "vectors"),
+        vlm_service=VlmService(
+            settings,
+            chat_completion=lambda messages: "请上传或提供具体的文档页面图片内容",
+        ),
+    )
+    counts = pipeline.index_data(
+        knowledge_base="kb_docx",
+        file_id="file-docx",
+        document=document,
+        config=ChunkingConfig(strategy="default"),
+        file_name="guide.docx",
+        force_image_description=True,
+    )
+    assert counts["images"] == 0

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.services.markdown_render import (
+    BACKEND_URL_PLACEHOLDER,
     is_markdown_content,
     markdown_payload_for_storage_text,
     rewrite_markdown_asset_urls,
@@ -10,7 +11,7 @@ from app.services.markdown_render import (
 def test_rewrite_markdown_asset_urls() -> None:
     text = "说明 ![图](kb_images/a.png) 结束"
     md = rewrite_markdown_asset_urls(text)
-    assert md.startswith("说明 ![图](/v1/uploads/assets/kb_images/a.png)")
+    assert md.startswith(f"说明 ![图]({BACKEND_URL_PLACEHOLDER}/v1/uploads/assets/kb_images/a.png)")
 
 
 def test_markdown_payload_for_docx_chunk() -> None:
@@ -18,7 +19,7 @@ def test_markdown_payload_for_docx_chunk() -> None:
     payload = markdown_payload_for_storage_text(text)
     assert payload["textFormat"] == "markdown"
     assert payload["hasImages"] is True
-    assert "/v1/uploads/assets/kb_images/x.jpeg" in payload["markdown"]
+    assert f"{BACKEND_URL_PLACEHOLDER}/v1/uploads/assets/kb_images/x.jpeg" in payload["markdown"]
 
 
 def test_plain_text_stays_plain() -> None:

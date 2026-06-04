@@ -211,6 +211,56 @@ def test_get_file_detail_happy_path(kb_client: TestClient) -> None:
     assert data["name"] == "guide.txt"
     assert data["status"] == "available"
     assert data["charCount"] == len(b"hello file detail")
+    assert data["sourceFileUrl"] == f"/v1/knowledge-bases/{kb_id}/files/{file_id}/raw"
+
+
+def test_get_file_raw_returns_source_bytes(kb_client: TestClient) -> None:
+    kb_id = _create_kb(kb_client, name=f"raw-{uuid4().hex[:6]}")
+    content = b"plain source bytes"
+    file_id = _index_file(
+        kb_client, kb_id, file_name="source.txt", content=content
+    )
+
+    inline = kb_client.get(f"/v1/knowledge-bases/{kb_id}/files/{file_id}/raw")
+    assert inline.status_code == 200
+    assert inline.content == content
+    assert inline.headers["content-type"].startswith("text/plain")
+    assert "inline" in inline.headers.get("content-disposition", "")
+
+    download = kb_client.get(
+        f"/v1/knowledge-bases/{kb_id}/files/{file_id}/raw",
+        params={"disposition": "attachment"},
+    )
+    assert download.status_code == 200
+    assert "attachment" in download.headers.get("content-disposition", "")
+
+
+def test_get_file_raw_missing_on_disk_returns_not_found(
+    domain_client: TestClient,
+    database_url: str,
+) -> None:
+    from app.repositories.kb_data_index_repository import KbDataIndexRepository
+
+    kb_id = _create_kb(domain_client, name=f"raw-missing-{uuid4().hex[:6]}")
+    file_id = f"file_{uuid4().hex[:24]}"
+    storage_key = f"kb/{kb_id}/{file_id}.txt"
+    KbDataIndexRepository(database_url).ensure_knowledge_base_stub(kb_id)
+    upload_repo = UploadRepository(database_url)
+    upload_repo.create_kb_file(
+        kb_id=kb_id,
+        file_id=file_id,
+        file_name="ghost.txt",
+        mime_type="text/plain",
+        size_bytes=1,
+        storage_key=storage_key,
+        status="ready",
+    )
+
+    response = domain_client.get(
+        f"/v1/knowledge-bases/{kb_id}/files/{file_id}/raw"
+    )
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "RESOURCE_NOT_FOUND"
 
 
 def test_get_unknown_file_returns_file_not_found(kb_client: TestClient) -> None:

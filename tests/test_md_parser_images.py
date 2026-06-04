@@ -75,7 +75,7 @@ def test_markdown_multimodal_index_with_vlm(tmp_path: Path) -> None:
         JsonVectorStore(tmp_path / "vectors"),
         vlm_service=VlmService(
             settings,
-            chat_completion=lambda messages: "键位：Enter 与 Esc",
+            chat_completion=lambda messages: "键位说明：包含 Enter 与 Esc 键，用于确认与取消操作。",
         ),
     )
     counts = pipeline.index_data(

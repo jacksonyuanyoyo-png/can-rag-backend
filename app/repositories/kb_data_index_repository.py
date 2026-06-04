@@ -12,6 +12,7 @@ from psycopg.types.json import Json
 
 from app.core.config import get_settings
 from app.core.database import normalize_psycopg_url
+from app.repositories.knowledge_base_stub import insert_knowledge_base_stub
 from app.utils.text_sanitize import sanitize_for_postgres_json, sanitize_pg_text
 
 logger = logging.getLogger(__name__)
@@ -251,29 +252,9 @@ class KbDataIndexRepository:
         *,
         name: str | None = None,
     ) -> None:
-        display_name = (name or kb_id).strip() or kb_id
-        now = datetime.now(UTC)
         with self._connect() as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO app.t_dim_knowledge_base (
-                        id, name, scope, visibility, status,
-                        created_at, updated_at
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (id) DO NOTHING
-                    """,
-                    (
-                        kb_id,
-                        display_name,
-                        "personal",
-                        "private",
-                        "active",
-                        now,
-                        now,
-                    ),
-                )
+                insert_knowledge_base_stub(cur, kb_id, name=name)
             self._commit(conn)
 
     def ensure_kb_file_stub(

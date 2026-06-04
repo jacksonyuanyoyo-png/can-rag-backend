@@ -4,6 +4,7 @@ import uuid
 from pathlib import Path
 
 from app.core.config import get_settings
+from app.services.rag.image_normalize import normalize_image_bytes_for_storage
 
 KB_IMAGES_SUBDIR = "kb_images"
 
@@ -15,7 +16,7 @@ class ImageStore:
         self._root = Path(root).resolve()
 
     def save(self, data: bytes, *, suffix: str) -> str:
-        normalized = suffix.lstrip(".").lower() or "bin"
+        data, normalized = normalize_image_bytes_for_storage(data, suffix=suffix)
         storage_key = f"{KB_IMAGES_SUBDIR}/{uuid.uuid4()}.{normalized}"
         destination = self._root / storage_key
         destination.parent.mkdir(parents=True, exist_ok=True)

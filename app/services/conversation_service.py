@@ -25,6 +25,7 @@ from app.services.citation_sources import (
     build_message_sources,
     citations_from_hits,
 )
+from app.services.conversation_guard import ConversationGuard, RiskLevel
 from app.services.markdown_render import rewrite_markdown_asset_urls
 from app.services.openai_chat_service import OpenAIChatError, OpenAIChatService
 
@@ -203,6 +204,7 @@ class ConversationService:
         self._settings = settings or get_settings()
         self._chat = chat_service or OpenAIChatService(self._settings)
         self._knowledge_base_service = knowledge_base_service
+        self._guard = ConversationGuard()
         self._lock = asyncio.Lock()
         self._active_generations: dict[str, ActiveGeneration] = {}
         self._message_feedback: dict[tuple[str, str], MessageFeedbackResult] = {}
@@ -373,29 +375,41 @@ class ConversationService:
                 conversation,
                 knowledge_base_ids,
             )
-            retrieval_query = self._build_retrieval_query(conversation, normalized_content)
-            hits = await self._retrieve_citations(kb_ids, retrieval_query)
-            citation_payload, sources_payload = self._prepare_retrieval_payload(hits)
+            intent = self._guard.classify(
+                normalized_content,
+                has_kb=bool(kb_ids),
+                conversation=conversation,
+            )
+            citation_payload: list[dict[str, Any]] = []
+            sources_payload: dict[str, Any] | None = None
+            if intent.should_retrieve:
+                retrieval_query = self._build_retrieval_query(conversation, normalized_content)
+                hits = await self._retrieve_citations(kb_ids, retrieval_query)
+                citation_payload, sources_payload = self._prepare_retrieval_payload(hits)
             openai_model = self._chat.resolve_model(model_id)
             conversation = self._load_conversation_for_generation(conversation_id)
-            chat_messages = self._build_chat_messages(
-                conversation,
-                citations=citation_payload,
-            )
-            chat_messages.append({"role": "user", "content": normalized_content})
-            chat_messages = append_citation_figures_to_messages(
-                chat_messages,
-                citations=citation_payload,
-                upload_root=self._settings.upload_root_resolved,
-                settings=self._settings,
-            )
-            try:
-                reply, usage = await self._chat.complete(messages=chat_messages, model=openai_model)
-            except OpenAIChatError as exc:
-                raise BusinessError(
-                    ErrorCode.MESSAGE_GENERATION_FAILED,
-                    details={"reason": exc.code, "message": exc.message},
-                ) from exc
+            if intent.risk_level == RiskLevel.HIGH and intent.safe_response:
+                reply = intent.safe_response
+                usage = MessageUsage()
+            else:
+                chat_messages = self._build_chat_messages(
+                    conversation,
+                    citations=citation_payload,
+                )
+                chat_messages.append({"role": "user", "content": normalized_content})
+                chat_messages = append_citation_figures_to_messages(
+                    chat_messages,
+                    citations=citation_payload,
+                    upload_root=self._settings.upload_root_resolved,
+                    settings=self._settings,
+                )
+                try:
+                    reply, usage = await self._chat.complete(messages=chat_messages, model=openai_model)
+                except OpenAIChatError as exc:
+                    raise BusinessError(
+                        ErrorCode.MESSAGE_GENERATION_FAILED,
+                        details={"reason": exc.code, "message": exc.message},
+                    ) from exc
 
             reply = self._finalize_assistant_markdown(reply)
 
@@ -474,7 +488,12 @@ class ConversationService:
             conversation_for_llm,
             normalized_content,
         )
-        if kb_ids:
+        intent = self._guard.classify(
+            normalized_content,
+            has_kb=bool(kb_ids),
+            conversation=conversation_for_llm,
+        )
+        if intent.should_retrieve:
             yield SseEvent(
                 event="retrieval.started",
                 data={"messageId": assistant_message.id, "knowledgeBaseIds": kb_ids},
@@ -507,25 +526,32 @@ class ConversationService:
         cancelled = False
         usage = MessageUsage()
         try:
-            async for delta, usage_update in self._chat.stream(
-                messages=chat_messages,
-                model=openai_model,
-                cancel_event=cancel_event,
-            ):
-                if cancel_event.is_set():
-                    cancelled = True
-                if usage_update is not None:
-                    usage = usage_update
-                    break
-                if cancelled:
-                    break
-                if not delta:
-                    continue
+            if intent.risk_level == RiskLevel.HIGH and intent.safe_response:
                 async for delta_event in self._emit_character_deltas(
                     assistant_message=assistant_message,
-                    text=delta,
+                    text=intent.safe_response,
                 ):
                     yield delta_event
+            else:
+                async for delta, usage_update in self._chat.stream(
+                    messages=chat_messages,
+                    model=openai_model,
+                    cancel_event=cancel_event,
+                ):
+                    if cancel_event.is_set():
+                        cancelled = True
+                    if usage_update is not None:
+                        usage = usage_update
+                        break
+                    if cancelled:
+                        break
+                    if not delta:
+                        continue
+                    async for delta_event in self._emit_character_deltas(
+                        assistant_message=assistant_message,
+                        text=delta,
+                    ):
+                        yield delta_event
         except OpenAIChatError as exc:
             assistant_message.status = MessageStatus.FAILED
             self._persist_message_update(assistant_message)

@@ -1,15 +1,27 @@
 from __future__ import annotations
 
 import base64
+import io
 from pathlib import Path
 from typing import Any
+
+from PIL import Image
 
 from app.core.config import Settings
 from app.services.rag.vlm_service import VlmService, _SYSTEM_PROMPT
 
 
 def _large_enough_payload() -> bytes:
-    return b"x" * 5120
+    image = Image.new("RGB", (120, 120), color=(10, 20, 30))
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG", compress_level=0)
+    payload = buffer.getvalue()
+    if len(payload) < 5120:
+        image = Image.new("RGB", (512, 512), color=(10, 20, 30))
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG", compress_level=0)
+        payload = buffer.getvalue()
+    return payload
 
 
 def test_describe_image_returns_none_when_disabled() -> None:
@@ -51,7 +63,8 @@ def test_describe_image_uses_injected_completion_with_data_url() -> None:
     image_url = user_content[1]["image_url"]["url"]
     assert image_url.startswith("data:image/png;base64,")
     encoded_part = image_url.split(",", 1)[1]
-    assert base64.standard_b64decode(encoded_part) == payload
+    decoded = base64.standard_b64decode(encoded_part)
+    assert decoded.startswith(b"\x89PNG")
 
 
 def test_describe_image_skips_when_below_min_bytes() -> None:

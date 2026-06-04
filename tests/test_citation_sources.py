@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from app.domain.knowledge_base import SearchHit
 from app.services.citation_sources import build_message_sources, citation_from_hit
-from app.services.markdown_render import upload_asset_path
+from app.services.markdown_render import BACKEND_URL_PLACEHOLDER, upload_asset_path
 
 
 def test_upload_asset_path_encodes_segments() -> None:
     path = upload_asset_path("kb_images/foo bar.png")
-    assert path == "/v1/uploads/assets/kb_images/foo%20bar.png"
+    assert path == f"{BACKEND_URL_PLACEHOLDER}/v1/uploads/assets/kb_images/foo%20bar.png"
 
 
 def test_citation_from_hit_collects_image_keys_from_snippet() -> None:

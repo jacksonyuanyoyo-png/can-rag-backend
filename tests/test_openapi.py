@@ -38,6 +38,7 @@ DOCUMENTED_V1_ENDPOINTS: list[tuple[str, str]] = [
     ("delete", "/v1/knowledge-bases/{kb_id}"),
     ("get", "/v1/knowledge-bases/{kb_id}/files"),
     ("get", "/v1/knowledge-bases/{kb_id}/files/{file_id}"),
+    ("get", "/v1/knowledge-bases/{kb_id}/files/{file_id}/raw"),
     ("delete", "/v1/knowledge-bases/{kb_id}/files/{file_id}"),
     ("post", "/v1/knowledge-bases/{kb_id}/files:batch-delete"),
     ("post", "/v1/knowledge-bases/{kb_id}/hit-test"),
@@ -58,7 +59,7 @@ def test_openapi_includes_all_documented_v1_endpoints() -> None:
 
     assert response.status_code == 200
     paths = response.json()["paths"]
-    assert len(DOCUMENTED_V1_ENDPOINTS) == 41
+    assert len(DOCUMENTED_V1_ENDPOINTS) == 42
 
     missing: list[str] = []
     for method, path in DOCUMENTED_V1_ENDPOINTS:

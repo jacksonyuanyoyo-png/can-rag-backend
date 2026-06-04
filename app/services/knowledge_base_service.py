@@ -21,10 +21,16 @@ from app.domain.upload import KnowledgeBaseFileRecord
 from app.repositories.kb_data_index_repository import KbDataIndexRepository
 from app.repositories.knowledge_base_repository import KnowledgeBaseRepository
 from app.repositories.upload_repository import UploadRepository
+from app.services.kb_source_file import (
+    ResolvedKbSourceFile,
+    resolve_kb_source_file,
+    source_file_api_path,
+)
 from app.services.markdown_render import markdown_payload_for_storage_text
 from app.services.rag.kb_embedding import KbEmbeddingConfig, resolve_kb_embedding_config
 from app.services.rag.parsing.md_parser import extract_image_storage_keys
 from app.services.rag.pipeline import RagPipeline
+from app.services.rag.retrieval_postprocess import postprocess_search_hits
 
 HIT_TEST_MIN_TOP_K = 1
 HIT_TEST_MAX_TOP_K = 50
@@ -63,13 +69,15 @@ class KnowledgeBaseFileDetail:
     status: str
     char_count: int
     uploaded_at: str
+    kb_id: str
     tags: list[str] | None = None
     mime_type: str | None = None
     size_bytes: int | None = None
     error_message: str | None = None
+    storage_key: str | None = None
 
     def to_api_dict(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "id": self.id,
             "name": self.name,
             "format": self.format,
@@ -80,7 +88,11 @@ class KnowledgeBaseFileDetail:
             "mimeType": self.mime_type,
             "sizeBytes": self.size_bytes,
             "errorMessage": self.error_message,
+            "sourceFileUrl": source_file_api_path(kb_id=self.kb_id, file_id=self.id),
         }
+        if self.storage_key is not None:
+            payload["storageKey"] = self.storage_key
+        return payload
 
 
 @dataclass(slots=True)
@@ -375,7 +387,7 @@ class KnowledgeBaseService:
                 query=query,
                 top_k=top_k,
             )
-        return hits
+        return self._finalize_search_hits(hits, top_k=top_k)
 
     def hit_test(
         self,
@@ -430,6 +442,8 @@ class KnowledgeBaseService:
         if file_ids:
             allowed = set(file_ids)
             hits = [hit for hit in hits if hit.document_id in allowed]
+
+        hits = self._finalize_search_hits(hits, top_k=top_k)
 
         return {
             "results": [_search_hit_to_hit_test_result(hit) for hit in hits],
@@ -643,6 +657,33 @@ class KnowledgeBaseService:
         before = [self._row_to_context_item(row) for row in before_rows]
         after = [self._row_to_context_item(row) for row in after_rows]
         return FileChunkWithContextResult(target=target, before=before, after=after)
+
+    def resolve_source_file(
+        self,
+        *,
+        metadata: KnowledgeBaseMetadata,
+        file_id: str,
+    ) -> ResolvedKbSourceFile:
+        pg_record: KnowledgeBaseFileRecord | None = None
+        if self._upload_repository is not None:
+            candidate = self._upload_repository.get_kb_file(file_id)
+            if candidate is not None and candidate.kb_id == metadata.id:
+                pg_record = candidate
+
+        document = metadata.documents.get(file_id)
+        if pg_record is None and document is None:
+            raise BusinessError(
+                ErrorCode.FILE_NOT_FOUND,
+                details={"fileId": file_id},
+            )
+
+        return resolve_kb_source_file(
+            settings=self._settings,
+            metadata=metadata,
+            file_id=file_id,
+            pg_record=pg_record,
+            document=document,
+        )
 
     def get_file_detail(
         self,
@@ -1015,10 +1056,12 @@ class KnowledgeBaseService:
             status=self._pg_file_status(record=record, chunk_count=chunk_count),
             char_count=record.char_count if record.char_count is not None else record.size_bytes,
             uploaded_at=record.created_at.isoformat().replace("+00:00", "Z"),
+            kb_id=record.kb_id,
             tags=record.tags,
             mime_type=record.mime_type,
             size_bytes=record.size_bytes,
             error_message=record.error_message,
+            storage_key=record.storage_key,
         )
 
     @staticmethod
@@ -1070,10 +1113,12 @@ class KnowledgeBaseService:
             status=file_status,
             char_count=char_count,
             uploaded_at=document.created_at,
+            kb_id=metadata.id,
             tags=None,
             mime_type=document.content_type,
             size_bytes=size_bytes,
             error_message=error_message,
+            storage_key=None,
         )
 
     @staticmethod
@@ -1109,6 +1154,10 @@ class KnowledgeBaseService:
             return path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             return path.read_text(encoding="utf-8", errors="replace")
+
+    @staticmethod
+    def _finalize_search_hits(hits: list[SearchHit], *, top_k: int) -> list[SearchHit]:
+        return postprocess_search_hits(hits, top_k=top_k)
 
     def _multi_vector_search(
         self,
