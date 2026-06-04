@@ -30,6 +30,8 @@ ALLOWED_EXTENSIONS: frozenset[str] = frozenset(
         ".pptx",
         ".txt",
         ".md",
+        ".html",
+        ".htm",
         ".csv",
         ".xls",
         ".xlsx",
@@ -52,6 +54,8 @@ EXTENSION_MIME_TYPES: dict[str, frozenset[str]] = {
     ),
     ".txt": frozenset({"text/plain"}),
     ".md": frozenset({"text/markdown", "text/plain", "text/x-markdown"}),
+    ".html": frozenset({"text/html", "application/xhtml+xml"}),
+    ".htm": frozenset({"text/html", "application/xhtml+xml"}),
     ".csv": frozenset({"text/csv", "application/csv", "text/plain"}),
     ".xls": frozenset({"application/vnd.ms-excel"}),
     ".xlsx": frozenset(

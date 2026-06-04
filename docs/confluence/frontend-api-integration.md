@@ -450,7 +450,10 @@ Content-Type: application/json
 
 ### 5.3.1 网页 URL 导入（Web Import）
 
-从公网 URL 抓取 HTML、抽取正文为 Markdown、注册知识库文件，并可一步创建导入任务。抽取为**通用管线**（Trafilatura → Readability 兜底 → 可选 Playwright 渲染），无站点定制选择器。
+> **前端专用详版**：[`docs/api/web-import-api.md`](../api/web-import-api.md)（含请求/响应、chunking、轮询 job、chunks 列表、TypeScript 类型与示例）。  
+> **说明**：SSRF 校验默认走**公共 DNS**（`WEB_SSRF_USE_PUBLIC_DNS`），避免本机代理 fake-ip 误拦公网 URL（如 `docs.vespa.ai`）。仅真实内网 URL 会拒绝。
+
+从公网 URL 抓取 HTML、抽取正文为 Markdown、注册知识库文件，并可一步创建导入任务。**备选**：[文件上传导入](../api/file-import-from-web-page.md)（内网页、抓取失败时）。抽取为**通用管线**（Trafilatura → Readability 兜底 → 可选 Playwright 渲染），无站点定制选择器。
 
 ```http
 POST /v1/knowledge-bases/{kbId}/web-imports
@@ -1344,7 +1347,7 @@ console.log(hit.data.results);
 | 文件落盘路径 | `storageKey` 形如 `kb/{kbId}/{fileId}.pdf`，非 `{知识库名称}/` 目录 |
 | presign 后 404 | 需将文件写入 `app/storage/uploads/{storageKey}` |
 | import 一直 queued | 检查 `DATABASE_URL`、Postgres、Poller 日志 |
-| 网页导入失败 | 确认 URL 为公网 https；查看 `IMPORT_PARSE_FAILED` 详情；SPA 页可设 `useBrowserFallback: true` |
+| 网页导入失败 | 确认 URL 为公网 https；若报「内网或保留地址」多为代理 DNS，改 [文件上传导入](../api/file-import-from-web-page.md)；SPA 可设 `useBrowserFallback: true` |
 | 网页导入无 importJobId | `autoImport=false` 或未配置 `DATABASE_URL` / worker；需手动 POST import-jobs |
 | 无 citation | 确认 `knowledgeBaseIds` 非空且 import 已完成 |
 | 原文对照只显示 Markdown 图片原文 | 按 **§9.4** 用 `/v1/uploads/assets/` 渲染 Markdown 图片 |

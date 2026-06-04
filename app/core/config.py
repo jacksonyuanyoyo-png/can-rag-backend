@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     WEB_MIN_CONTENT_CHARS: int = 200
     WEB_LINK_DENSITY_MAX: float = 0.35
     WEB_ENABLE_BROWSER_FALLBACK: bool = True
+    # SSRF 校验用公共 DNS，避免 Clash/Surge fake-ip 把公网域名解析成 198.18.x 导致误拦
+    WEB_SSRF_USE_PUBLIC_DNS: bool = True
     WEB_USER_AGENT: str = (
         "Mozilla/5.0 (compatible; CAN-RAG/1.0; +https://www.fidelity.ca)"
     )
